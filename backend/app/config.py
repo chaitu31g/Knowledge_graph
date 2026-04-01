@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     # Qwen Colab endpoint (set after launching Colab notebook)
     QWEN_API_URL: str = ""
 
+    # Flag to enable loading Qwen 3.5 4B directly in the backend process
+    ENABLE_LOCAL_QWEN: bool = True
+
     # Upload directory
     UPLOAD_DIR: str = os.path.join(os.path.dirname(os.path.dirname(__file__)), "uploads")
 

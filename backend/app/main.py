@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.routers import upload, query
 from app.services.graph_builder import graph_builder
+from app.services.ai_client import init_qwen_local
 
 # ── Logging ─────────────────────────────────────────────────────────
 
@@ -31,9 +32,14 @@ async def lifespan(app: FastAPI):
     graph_builder.connect()
     graph_builder.create_constraints()
     logger.info("Neo4j connected and constraints created")
+    
+    # Initialize local Qwen 3.5 4B model if configured
+    init_qwen_local()
+    
     yield
     graph_builder.close()
     logger.info("Neo4j connection closed")
+
 
 
 # ── App ─────────────────────────────────────────────────────────────

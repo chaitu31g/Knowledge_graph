@@ -1,13 +1,9 @@
 """
 AI Client — Qwen 3.5 4B Integration
 
-In local mode: sends HTTP request to Qwen API endpoint.
-In Colab mode: this file gets patched to call the model directly.
-
-The system prompt enforces strict rules:
-- ONLY use provided data
-- NEVER hallucinate
-- Format as clean electronics assistant answers
+Supports two modes of operation:
+1. Local in-process: Downloads and loads Qwen 3.5 4B directly via HuggingFace transformers (recommended for Colab/GPU).
+2. HTTP Endpoint: Sends data to an external Qwen API (if QWEN_API_URL is set).
 """
 import json
 import logging
@@ -16,9 +12,55 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+# ── Local Model State ───────────────────────────────────────────────
+_model = None
+_tokenizer = None
+_is_loaded = False
+
+
+def init_qwen_local():
+    """
+    Initialize Qwen 3.5 4B locally within the FastAPI process.
+    Called during app startup if ENABLE_LOCAL_QWEN is True.
+    """
+    global _model, _tokenizer, _is_loaded
+    if not settings.ENABLE_LOCAL_QWEN:
+        logger.info("Local Qwen 3.5 4B is disabled via config.")
+        return
+
+    logger.info("Initializing local Qwen 3.5 4B model (this may take a few minutes)...")
+    try:
+        import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        model_name = "Qwen/Qwen3.5-4B"
+        _tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+        
+        # Load efficiently on Colab GPU if available
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        _model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+            device_map="auto" if torch.cuda.is_available() else None,
+            trust_remote_code=True,
+        )
+        if not torch.cuda.is_available():
+            _model = _model.to(device)
+            
+        _is_loaded = True
+        logger.info(f"✅ Local Qwen 3.5 4B successfully loaded on {device}")
+    except ImportError:
+        logger.error("Failed to load Qwen: 'transformers' or 'torch' package is missing.")
+    except Exception as e:
+        logger.error(f"Failed to load local Qwen model: {e}")
+
+
 def is_qwen_available() -> bool:
-    """Check if Qwen API URL is configured."""
-    return bool(settings.QWEN_API_URL)
+    """Check if Qwen is available (either local or via API)."""
+    return _is_loaded or bool(settings.QWEN_API_URL)
+
+
+# ── System Prompt & Formatting ──────────────────────────────────────
 
 SYSTEM_PROMPT = """You are an expert electronics assistant.
 
@@ -57,19 +99,12 @@ This parameter defines the maximum continuous current the device can handle unde
 
 def _build_user_message(query: str, data: dict) -> str:
     """Build the user message with query + structured data."""
-    # Format the data cleanly for the model
     if "rows" in data and "columns" in data:
-        # Table data — format as structured records
         formatted_rows = []
         for row in data["rows"]:
-            record = {}
-            for col in data["columns"]:
-                val = row.get(col, "")
-                if val:
-                    record[col] = val
+            record = {col: row.get(col, "") for col in data["columns"] if row.get(col)}
             if record:
                 formatted_rows.append(record)
-
         data_str = json.dumps({
             "type": "parameter_table",
             "columns": data["columns"],
@@ -86,23 +121,59 @@ def _build_user_message(query: str, data: dict) -> str:
     )
 
 
+# ── API / Interface ─────────────────────────────────────────────────
+
+def _generate_local(query: str, data: dict) -> str:
+    """Generate answer using the locally loaded HuggingFace model."""
+    import torch
+    user_msg = _build_user_message(query, data)
+    
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": user_msg},
+    ]
+    
+    # Properly format messages for Qwen chat template
+    text = _tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    inputs = _tokenizer([text], return_tensors="pt").to(_model.device)
+    
+    try:
+        with torch.no_grad():
+            outputs = _model.generate(
+                **inputs,
+                max_new_tokens=512,
+                temperature=0.1,  # Keep it technical and deterministic
+                top_p=0.9,
+                do_sample=True,
+            )
+        # Decode only the generated response
+        generated = outputs[0][inputs.input_ids.shape[-1]:]
+        return _tokenizer.decode(generated, skip_special_tokens=True).strip()
+    except Exception as e:
+        logger.error(f"Local Qwen generation failed: {e}")
+        return ""
+
+
 async def format_with_qwen(query: str, structured_data: dict) -> str:
     """
-    Send structured data to Qwen for natural language formatting.
-
-    Returns formatted answer string, or empty string if Qwen is unavailable.
+    Format data into a Chat response.
+    Tries Local model first, falls back to API.
     """
-    # If data is just an error message, don't bother with AI
+    # Short-circuit if graph returned an error/empty message
     if isinstance(structured_data, dict) and "message" in structured_data:
         if "no " in structured_data["message"].lower() or "error" in structured_data["message"].lower():
             return ""
 
-    if not settings.QWEN_API_URL:
-        logger.info("QWEN_API_URL not configured — AI formatting disabled")
+    if not is_qwen_available():
+        logger.info("Qwen not configured — AI formatting disabled")
         return ""
 
-    user_msg = _build_user_message(query, structured_data)
+    # Priority 1: Use strictly local in-process model
+    if _is_loaded:
+        return _generate_local(query, structured_data)
 
+    # Priority 2: Use external HTTP API endpoint
+    user_msg = _build_user_message(query, structured_data)
     payload = {
         "query": query,
         "system_prompt": SYSTEM_PROMPT,
@@ -122,12 +193,6 @@ async def format_with_qwen(query: str, structured_data: dict) -> str:
             response.raise_for_status()
             result = response.json()
             return result.get("answer", result.get("text", ""))
-    except httpx.ConnectError:
-        logger.error("Cannot connect to Qwen API at %s", settings.QWEN_API_URL)
-        return ""
-    except httpx.HTTPStatusError as e:
-        logger.error("Qwen API error: %s", e.response.text)
-        return ""
     except Exception as e:
-        logger.error("Qwen API unexpected error: %s", e)
+        logger.error(f"Qwen API request failed: {e}")
         return ""

@@ -16,6 +16,10 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+def is_qwen_available() -> bool:
+    """Check if Qwen API URL is configured."""
+    return bool(settings.QWEN_API_URL)
+
 SYSTEM_PROMPT = """You are an expert electronics assistant.
 
 You are given structured data extracted from a semiconductor datasheet via a Knowledge Graph.

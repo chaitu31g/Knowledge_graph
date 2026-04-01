@@ -63,11 +63,21 @@ app.include_router(query.router)
 
 # ── Health Check ────────────────────────────────────────────────────
 
+from app.services.ai_client import is_qwen_available
+
+@app.get("/")
+async def root():
+    return {
+        "message": "DatasheetIQ Knowledge Graph API is running",
+        "docs_url": "/docs",
+        "health_url": "/health"
+    }
+
 @app.get("/health")
 async def health_check():
     return {
         "status": "ok",
         "service": "Knowledge Graph Datasheet API",
         "neo4j_uri": settings.NEO4J_URI,
-        "qwen_configured": bool(settings.QWEN_API_URL),
+        "qwen_configured": is_qwen_available(),
     }

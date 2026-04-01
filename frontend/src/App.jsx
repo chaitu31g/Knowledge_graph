@@ -1,17 +1,14 @@
 import { useState, useEffect } from 'react'
 import { healthCheck, getBackendUrl, setBackendUrl } from './api'
 import UploadComponent from './components/UploadComponent'
-import QueryInput from './components/QueryInput'
-import ResultDisplay from './components/ResultDisplay'
+import ChatbotComponent from './components/ChatbotComponent'
 import './App.css'
 
 /**
  * App — Main application shell.
- * Layout: Header → Settings → Status → Upload → Query → Results
+ * Updated to a Chat-centric layout for AI Datasheet Querying.
  */
 export default function App() {
-  const [result, setResult] = useState(null)
-  const [loading, setLoading] = useState(false)
   const [backendStatus, setBackendStatus] = useState('pending')
   const [neo4jStatus, setNeo4jStatus] = useState('pending')
   const [qwenStatus, setQwenStatus] = useState('disconnected')
@@ -32,6 +29,7 @@ export default function App() {
     } catch {
       setBackendStatus('disconnected')
       setNeo4jStatus('disconnected')
+      setQwenStatus('disconnected')
     }
   }
 
@@ -49,12 +47,7 @@ export default function App() {
     setBackendUrl(cleaned)
     setBackendUrlState(cleaned)
     setBackendStatus('pending')
-    // Re-check health immediately
     setTimeout(checkHealth, 100)
-  }
-
-  const handleUploadComplete = () => {
-    setResult(null)
   }
 
   return (
@@ -64,8 +57,7 @@ export default function App() {
         <div className="logo-icon">⚛</div>
         <h1>DatasheetIQ</h1>
         <p className="subtitle">
-          Upload any semiconductor datasheet — query its exact specifications
-          through an AI-powered Knowledge Graph
+          Upload semiconductor datasheets — query specs using AI & Knowledge Graph
         </p>
       </header>
 
@@ -95,37 +87,26 @@ export default function App() {
                 Save & Connect
               </button>
             </div>
-            <p className="settings-hint">
-              Paste your Cloudflare tunnel URL here. It will be saved in your browser.
-            </p>
           </div>
         )}
       </div>
 
       {/* Status Bar */}
       <div className="status-bar">
-        <div>
-          <span className={`status-dot ${backendStatus}`} />
-          Backend API
-        </div>
-        <div>
-          <span className={`status-dot ${neo4jStatus}`} />
-          Neo4j Graph
-        </div>
-        <div>
-          <span className={`status-dot ${qwenStatus}`} />
-          Qwen AI {qwenStatus === 'disconnected' && '(optional)'}
-        </div>
+        <div><span className={`status-dot ${backendStatus}`} />Backend API</div>
+        <div><span className={`status-dot ${neo4jStatus}`} />Neo4j Graph</div>
+        <div><span className={`status-dot ${qwenStatus}`} />Qwen 3.5 4B {qwenStatus === 'disconnected' && '(offline)'}</div>
       </div>
 
-      {/* Upload */}
-      <UploadComponent onUploadComplete={handleUploadComplete} />
-
-      {/* Query */}
-      <QueryInput onResult={setResult} onLoading={setLoading} />
-
-      {/* Results */}
-      <ResultDisplay result={result} />
+      {/* Sidebar-style Layout */}
+      <div className="main-layout">
+        <div className="upload-sidebar">
+          <UploadComponent onUploadComplete={() => {}} />
+        </div>
+        <div className="chat-main">
+          <ChatbotComponent />
+        </div>
+      </div>
     </div>
   )
 }

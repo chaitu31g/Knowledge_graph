@@ -18,6 +18,8 @@ neo4j==5.23.0
 pyngrok
 
 # ── AI / ML (unpinned — Colab provides torch) ──────────
-transformers
-accelerate
+transformers==4.45.0
+accelerate==0.34.0
 torch
+sentencepiece
+huggingface_hub

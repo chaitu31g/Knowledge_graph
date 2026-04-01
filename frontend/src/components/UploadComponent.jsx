@@ -1,13 +1,15 @@
 import { useState, useRef, useCallback } from 'react'
-import axios from 'axios'
+import { uploadPdf } from '../api'
 
 /**
- * UploadComponent — PDF drag-and-drop upload with progress and stats.
+ * UploadComponent — PDF upload with real-time processing steps.
+ * Shows exactly what's happening at each stage of the pipeline.
  */
 export default function UploadComponent({ onUploadComplete }) {
   const [dragActive, setDragActive] = useState(false)
   const [uploading, setUploading] = useState(false)
-  const [progress, setProgress] = useState(0)
+  const [steps, setSteps] = useState([])     // Array of step events
+  const [currentStep, setCurrentStep] = useState(null)
   const [result, setResult] = useState(null)
   const [error, setError] = useState('')
   const inputRef = useRef(null)
@@ -29,26 +31,45 @@ export default function UploadComponent({ onUploadComplete }) {
     }
 
     setUploading(true)
-    setProgress(0)
+    setSteps([])
+    setCurrentStep(null)
     setError('')
     setResult(null)
 
-    const formData = new FormData()
-    formData.append('file', file)
-
     try {
-      const response = await axios.post('/api/upload', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-        onUploadProgress: (e) => {
-          const pct = Math.round((e.loaded * 100) / (e.total || 1))
-          setProgress(pct)
-        },
+      const finalResult = await uploadPdf(file, (stepData) => {
+        setCurrentStep(stepData)
+
+        // Add to steps log (avoid duplicate step numbers for 'processing' → 'done')
+        setSteps((prev) => {
+          const existing = prev.findIndex(
+            (s) => s.step === stepData.step && s.status === 'processing'
+          )
+          if (stepData.status === 'done' && existing !== -1) {
+            // Replace the 'processing' entry with 'done'
+            const updated = [...prev]
+            updated[existing] = stepData
+            return updated
+          }
+          // For table-level updates, replace previous table update
+          if (stepData.step === 4 && stepData.status === 'processing') {
+            const lastTableIdx = prev.findLastIndex(
+              (s) => s.step === 4 && s.status === 'processing'
+            )
+            if (lastTableIdx !== -1) {
+              const updated = [...prev]
+              updated[lastTableIdx] = stepData
+              return updated
+            }
+          }
+          return [...prev, stepData]
+        })
       })
 
-      setResult(response.data)
-      if (onUploadComplete) onUploadComplete(response.data)
+      setResult(finalResult)
+      if (onUploadComplete) onUploadComplete(finalResult)
     } catch (err) {
-      const msg = err.response?.data?.detail || err.message || 'Upload failed'
+      const msg = err.message || 'Upload failed'
       setError(msg)
     } finally {
       setUploading(false)
@@ -70,6 +91,20 @@ export default function UploadComponent({ onUploadComplete }) {
     }
   }
 
+  const getStepIcon = (step) => {
+    if (step.status === 'error') return '❌'
+    if (step.status === 'complete') return '🎉'
+    if (step.status === 'done') return '✅'
+    return '⏳'
+  }
+
+  const getProgressPercent = () => {
+    if (!currentStep) return 0
+    if (currentStep.status === 'complete') return 100
+    if (currentStep.status === 'error') return 0
+    return Math.round((currentStep.step / currentStep.total_steps) * 100)
+  }
+
   return (
     <div className="glass-card animate-fade-in-up" style={{ animationDelay: '100ms' }}>
       <div className="card-header">
@@ -78,52 +113,64 @@ export default function UploadComponent({ onUploadComplete }) {
         {result && <span className="card-badge">✓ Ingested</span>}
       </div>
 
-      <div
-        id="upload-zone"
-        className={`upload-zone ${dragActive ? 'drag-active' : ''}`}
-        onDragEnter={handleDrag}
-        onDragLeave={handleDrag}
-        onDragOver={handleDrag}
-        onDrop={handleDrop}
-        onClick={() => inputRef.current?.click()}
-      >
-        <input
-          ref={inputRef}
-          type="file"
-          accept=".pdf"
-          onChange={handleChange}
-          id="pdf-upload-input"
-        />
-        <div className="upload-icon">
-          {uploading ? '⏳' : dragActive ? '📥' : '📋'}
-        </div>
-        <p>
-          {uploading
-            ? 'Processing datasheet…'
-            : 'Drop a PDF datasheet here or click to browse'}
-        </p>
-        <p className="upload-hint">Supports any semiconductor datasheet format</p>
-      </div>
-
-      {/* Progress */}
-      {uploading && (
-        <div className="upload-progress">
-          <div className="progress-bar-track">
-            <div
-              className="progress-bar-fill"
-              style={{ width: `${progress}%` }}
-            />
+      {/* Drop zone — hide when processing */}
+      {!uploading && !result && (
+        <div
+          id="upload-zone"
+          className={`upload-zone ${dragActive ? 'drag-active' : ''}`}
+          onDragEnter={handleDrag}
+          onDragLeave={handleDrag}
+          onDragOver={handleDrag}
+          onDrop={handleDrop}
+          onClick={() => inputRef.current?.click()}
+        >
+          <input
+            ref={inputRef}
+            type="file"
+            accept=".pdf"
+            onChange={handleChange}
+            id="pdf-upload-input"
+          />
+          <div className="upload-icon">
+            {dragActive ? '📥' : '📋'}
           </div>
-          <div className="upload-status">
-            <span className="spinner" style={{
-              width: 12, height: 12,
-              border: '2px solid rgba(255,255,255,0.2)',
-              borderTopColor: 'var(--accent-blue)',
-              borderRadius: '50%',
-              animation: 'spin 0.6s linear infinite',
-              display: 'inline-block',
-            }} />
-            Parsing PDF &amp; building knowledge graph… {progress}%
+          <p>Drop a PDF datasheet here or click to browse</p>
+          <p className="upload-hint">Supports any semiconductor datasheet format</p>
+        </div>
+      )}
+
+      {/* Live Processing Steps */}
+      {(uploading || steps.length > 0) && (
+        <div className="processing-tracker">
+          {/* Overall progress bar */}
+          <div className="progress-overall">
+            <div className="progress-bar-track">
+              <div
+                className="progress-bar-fill animated-fill"
+                style={{ width: `${getProgressPercent()}%` }}
+              />
+            </div>
+            <span className="progress-percent">{getProgressPercent()}%</span>
+          </div>
+
+          {/* Step list */}
+          <div className="step-list">
+            {steps.map((step, i) => (
+              <div
+                key={`${step.step}-${step.status}-${i}`}
+                className={`step-item ${step.status} animate-step-in`}
+                style={{ animationDelay: `${i * 50}ms` }}
+              >
+                <span className="step-icon">{getStepIcon(step)}</span>
+                <div className="step-content">
+                  <div className="step-message">{step.message}</div>
+                  <div className="step-detail">{step.detail}</div>
+                </div>
+                {step.status === 'processing' && (
+                  <span className="step-spinner" />
+                )}
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -135,12 +182,9 @@ export default function UploadComponent({ onUploadComplete }) {
         </div>
       )}
 
-      {/* Success stats */}
+      {/* Final Result Stats */}
       {result && !uploading && (
         <div className="animate-fade-in">
-          <div className="upload-status success" style={{ marginTop: '0.75rem' }}>
-            ✓ {result.message}
-          </div>
           <div className="upload-stats stagger">
             <div className="stat-item animate-fade-in-up">
               <div className="stat-value">{result.total_pages}</div>
@@ -163,6 +207,18 @@ export default function UploadComponent({ onUploadComplete }) {
               <div className="stat-label">Images</div>
             </div>
           </div>
+
+          {/* Upload another */}
+          <button
+            className="upload-another-btn"
+            onClick={() => {
+              setResult(null)
+              setSteps([])
+              setCurrentStep(null)
+            }}
+          >
+            📄 Upload another datasheet
+          </button>
         </div>
       )}
     </div>

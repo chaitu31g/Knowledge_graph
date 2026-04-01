@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import axios from 'axios'
+import { queryDatasheet, getComponents } from '../api'
 
 /**
  * QueryInput — Search box with component filter and submit button.
@@ -14,8 +14,8 @@ export default function QueryInput({ onResult, onLoading }) {
   useEffect(() => {
     const fetchComponents = async () => {
       try {
-        const res = await axios.get('/api/components')
-        setComponents(res.data.components || [])
+        const list = await getComponents()
+        setComponents(list)
       } catch {
         // Not critical — selector will be empty
       }
@@ -31,11 +31,8 @@ export default function QueryInput({ onResult, onLoading }) {
     if (onLoading) onLoading(true)
 
     try {
-      const res = await axios.post('/api/query', {
-        query: query.trim(),
-        component: component,
-      })
-      if (onResult) onResult(res.data)
+      const data = await queryDatasheet(query.trim(), component)
+      if (onResult) onResult(data)
     } catch (err) {
       const msg = err.response?.data?.detail || err.message
       if (onResult) onResult({ type: 'text', data: { message: `Error: ${msg}` }, source: 'error' })

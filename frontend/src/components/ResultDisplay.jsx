@@ -1,6 +1,7 @@
 /**
- * ResultDisplay — Renders query results as tables or text.
- * Columns are ALWAYS determined dynamically from the backend data.
+ * ResultDisplay — Renders query results.
+ * AI answer is shown prominently as the primary response.
+ * Raw table/text data is shown below as supporting evidence.
  */
 export default function ResultDisplay({ result }) {
   if (!result) {
@@ -19,35 +20,56 @@ export default function ResultDisplay({ result }) {
   return (
     <div className="glass-card result-section animate-fade-in-up" style={{ animationDelay: '150ms' }}>
       <div className="card-header">
-        <div className="card-icon">{type === 'table' ? '📊' : '📝'}</div>
-        <h2>Results</h2>
+        <div className="card-icon">{ai_answer ? '🤖' : type === 'table' ? '📊' : '📝'}</div>
+        <h2>{ai_answer ? 'AI Answer' : 'Results'}</h2>
+        {source && <span className="card-badge">{type === 'table' ? 'Table' : 'Text'}</span>}
       </div>
 
-      {/* Meta bar */}
-      <div className="result-meta">
-        <span className={`result-type type-${type}`}>
-          {type === 'table' ? '◈ Table Result' : '◈ Text Result'}
-        </span>
-        {source && <span className="result-source">{source}</span>}
-      </div>
-
-      {/* AI Answer */}
+      {/* AI Answer — primary, prominent display */}
       {ai_answer && (
-        <div className="ai-answer">
-          <div className="ai-label">✦ AI Summary</div>
-          {ai_answer}
+        <div className="ai-answer-block animate-fade-in">
+          <div className="ai-answer-header">
+            <span className="ai-badge">✦ Qwen 3.5 4B</span>
+            <span className="ai-source">Data from Knowledge Graph</span>
+          </div>
+          <div className="ai-answer-content">
+            {ai_answer.split('\n').map((line, i) => (
+              <p key={i}>{line || '\u00A0'}</p>
+            ))}
+          </div>
         </div>
       )}
 
-      {/* Table rendering */}
-      {type === 'table' && data?.columns && data?.rows ? (
-        <TableResult columns={data.columns} rows={data.rows} />
-      ) : null}
+      {/* Source data section */}
+      {data && (
+        <div className={ai_answer ? 'source-data-section' : ''}>
+          {ai_answer && (
+            <div className="source-data-header">
+              <span className="source-toggle-label">📋 Source Data</span>
+              <span className="result-source">{source}</span>
+            </div>
+          )}
 
-      {/* Text rendering */}
-      {type === 'text' && data ? (
-        <TextResult data={data} />
-      ) : null}
+          {!ai_answer && (
+            <div className="result-meta">
+              <span className={`result-type type-${type}`}>
+                {type === 'table' ? '◈ Table Result' : '◈ Text Result'}
+              </span>
+              {source && <span className="result-source">{source}</span>}
+            </div>
+          )}
+
+          {/* Table rendering */}
+          {type === 'table' && data?.columns && data?.rows ? (
+            <TableResult columns={data.columns} rows={data.rows} />
+          ) : null}
+
+          {/* Text rendering */}
+          {type === 'text' && data ? (
+            <TextResult data={data} />
+          ) : null}
+        </div>
+      )}
     </div>
   )
 }

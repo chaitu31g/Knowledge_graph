@@ -52,10 +52,14 @@ export default function ChatbotComponent() {
 
     try {
       const response = await queryDatasheet(userQuery, component)
+      const rows = Array.isArray(response.data) ? response.data : []
+      const content = rows.length > 0
+        ? `Found ${rows.length} matching parameter row${rows.length === 1 ? '' : 's'}.`
+        : 'No matching parameter rows found.'
       
       const aiMsg = {
         role: 'assistant',
-        content: response.ai_answer || (response.data?.message) || "I couldn't find a clear answer for that.",
+        content,
         data: response.data,
         type: response.type,
         source: response.source
@@ -107,11 +111,8 @@ export default function ChatbotComponent() {
               </div>
               
               {/* Show source data if present */}
-              {msg.data && msg.type === 'mixed' && msg.data.table && msg.data.table.rows?.length > 0 && (
-                <CollapsibleTable data={msg.data.table} />
-              )}
-              {msg.data && msg.type === 'table' && msg.data.rows?.length > 0 && (
-                <CollapsibleTable data={msg.data} />
+              {msg.data && msg.type === 'table' && Array.isArray(msg.data) && msg.data.length > 0 && (
+                <CollapsibleTable rows={msg.data} />
               )}
 
               {msg.source && <div className="message-source">Source: {msg.source}</div>}
@@ -149,12 +150,11 @@ export default function ChatbotComponent() {
 /**
  * Collapsible table for source data within a chat bubble
  */
-function CollapsibleTable({ data }) {
+function CollapsibleTable({ rows }) {
   const [isOpen, setIsOpen] = useState(false)
-  
-  // Filter empty columns
-  const nonEmptyCols = data.columns.filter((col) =>
-    data.rows.some((row) => row[col] !== undefined && row[col] !== null && row[col] !== '')
+  const columns = ['parameter', 'value', 'unit', 'condition']
+  const nonEmptyCols = columns.filter((col) =>
+    rows.some((row) => row[col] !== undefined && row[col] !== null && row[col] !== '')
   )
 
   return (
@@ -170,7 +170,7 @@ function CollapsibleTable({ data }) {
               <tr>{nonEmptyCols.map(col => <th key={col}>{col}</th>)}</tr>
             </thead>
             <tbody>
-              {data.rows.map((row, i) => (
+              {rows.map((row, i) => (
                 <tr key={i}>
                   {nonEmptyCols.map(col => <td key={col}>{String(row[col] ?? '')}</td>)}
                 </tr>

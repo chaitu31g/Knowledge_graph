@@ -1,30 +1,24 @@
 """
-Query Engine — Phase 5
+Query Engine - Phase 5
 
-Classifies user queries and routes them to the appropriate data source:
-- Parameter query → Knowledge Graph (Cypher)
-- Feature/text query → Text search in graph
+Deterministic parameter retrieval from Neo4j.
 """
-import re
 import logging
+import re
+
 from app.models import QueryRequest, QueryResponse
 from app.services.graph_builder import graph_builder
 from app.utils.normalization import normalize_lookup_text
 
 logger = logging.getLogger(__name__)
 
-# ── Query Execution ─────────────────────────────────────────────────
 
 def execute_query(request: QueryRequest) -> QueryResponse:
-    """
-    Execute a unified query.
-    Instead of guessing if the user wants parameters or text,
-    we search BOTH and pass the combined context to the AI.
-    """
+    """Execute deterministic parameter retrieval from Neo4j."""
     search_term = _extract_search_term(request.query)
     normalized_search_term = normalize_lookup_text(search_term)
     logger.info(
-        "Unified query executing for: '%s' (normalized: '%s', component: %s)",
+        "Parameter query executing for: '%s' (normalized: '%s', component: %s)",
         search_term,
         normalized_search_term,
         request.component,
@@ -35,60 +29,12 @@ def execute_query(request: QueryRequest) -> QueryResponse:
         component=request.component,
     )
 
-    text_results = graph_builder.query_text(
-        search_term=search_term,
-        component=request.component,
-    )
-
-    image_results = graph_builder.query_images(
-        search_term=search_term,
-        component=request.component,
-    )
-    
-    if not param_results and not text_results and not image_results:
-        return QueryResponse(
-            type="text",
-            data={"message": f"No data found matching '{search_term}'."},
-            source="Knowledge Graph & Text Search — no match",
-        )
-
-    # Build the combined data payload
-    combined_data = {}
-    
-    if param_results:
-        combined_data["table"] = _results_to_table(param_results)
-        
-    if text_results:
-        combined_text = "\n\n".join(
-            f"[Page {r['page']}, Section {r['section']}] {r['content']}" for r in text_results
-        )
-        combined_data["text"] = {
-            "content": combined_text,
-            "sections": list(set(r["section"] for r in text_results if r["section"])),
-            "pages": list(set(r["page"] for r in text_results if r["page"])),
-        }
-
-    if image_results:
-        combined_images = "\n\n".join(
-            f"[Page {r['page']}, {r['type'].upper()}]: '{r['title']}' - {r['description']}" for r in image_results
-        )
-        combined_data["images"] = combined_images
-
-    sources = []
-    if param_results and combined_data.get("table", {}).get("rows"):
-        sources.append(f"{len(combined_data['table']['rows'])} parameter rows")
-    if text_results:
-        sources.append(f"{len(text_results)} text blocks")
-    if image_results:
-        sources.append(f"{len(image_results)} images/graphs")
-
     return QueryResponse(
-        type="mixed",
-        data=combined_data,
-        source="Knowledge Graph — " + ", ".join(sources),
+        type="table",
+        data=param_results,
+        source=f"Neo4j parameter lookup - {len(param_results)} rows",
     )
 
-# ── Helpers ─────────────────────────────────────────────────────────
 
 def _extract_search_term(query: str) -> str:
     """
@@ -96,57 +42,25 @@ def _extract_search_term(query: str) -> str:
     Strips common question words and returns the core term(s).
     """
     q = query.strip()
-    # Remove common question prefixes
     prefixes = [
-        r"what is the\s+", r"what's the\s+", r"what are the\s+",
-        r"tell me about\s+", r"show me\s+", r"find\s+",
-        r"what is\s+", r"how much\s+", r"how many\s+",
-        r"value of\s+", r"get\s+", r"give me\s+",
+        r"what is the\s+",
+        r"what's the\s+",
+        r"what are the\s+",
+        r"tell me about\s+",
+        r"show me\s+",
+        r"find\s+",
+        r"what is\s+",
+        r"how much\s+",
+        r"how many\s+",
+        r"value of\s+",
+        r"get\s+",
+        r"give me\s+",
     ]
     for prefix in prefixes:
         q = re.sub(prefix, "", q, flags=re.IGNORECASE)
 
-    # Remove trailing question marks and common suffixes
     q = re.sub(r"\?+$", "", q)
     q = re.sub(r"\s+of this (component|chip|ic|device)$", "", q, flags=re.IGNORECASE)
     q = re.sub(r"\s+for this (component|chip|ic|device)$", "", q, flags=re.IGNORECASE)
 
     return q.strip()
-
-
-def _results_to_table(results: list[dict]) -> dict:
-    """
-    Convert graph query results into a clean table.
-    Each result row is one complete record: parameter + value + unit + condition.
-    Condition is now carried directly on the row (not merged from a shared node).
-    """
-    columns = ["component", "parameter", "symbol", "value", "unit", "condition", "page"]
-
-    rows = []
-    seen = set()
-    
-    for r in results:
-        # Only include rows that actually have a value and unit
-        if not r.get("value") or not r.get("unit"):
-            continue
-            
-        record = {
-            "component":  r.get("component") or "",
-            "parameter":  r.get("parameter") or "",
-            "symbol":     r.get("symbol") or "",
-            "value":      r.get("value") or "",
-            "unit":       r.get("unit") or "",
-            "condition":  r.get("condition") or "",
-            "page":       r.get("page") or "",
-        }
-        
-        # Create a unique fingerprint for deduplication
-        fingerprint = f"{record['component']}|{record['parameter']}|{record['value']}|{record['condition']}"
-        if fingerprint not in seen:
-            seen.add(fingerprint)
-            rows.append(record)
-
-    return {
-        "columns": columns,
-        "rows": rows,
-    }

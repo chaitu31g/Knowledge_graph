@@ -16,6 +16,8 @@ export default function ResultDisplay({ result }) {
   }
 
   const { type, data, source, ai_answer } = result
+  const tableRows = Array.isArray(data) ? data : []
+  const tableColumns = ['parameter', 'value', 'unit', 'condition']
 
   return (
     <div className="glass-card result-section animate-fade-in-up" style={{ animationDelay: '150ms' }}>
@@ -60,8 +62,8 @@ export default function ResultDisplay({ result }) {
           )}
 
           {/* Table rendering */}
-          {type === 'table' && data?.columns && data?.rows ? (
-            <TableResult columns={data.columns} rows={data.rows} />
+          {type === 'table' ? (
+            <TableResult columns={tableColumns} rows={tableRows} />
           ) : null}
 
           {/* Text rendering */}

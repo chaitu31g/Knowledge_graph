@@ -167,10 +167,9 @@ class GraphBuilder:
                     # Parameters for this table
                     params = parameters_by_table.get(table_index - 1, [])
                     for param in params:
-                        self._store_parameter(
+                        stats["parameters_stored"] += self._store_parameter(
                             session, component, table_uid, param
                         )
-                        stats["parameters_stored"] += 1
 
                 # ── Images / Graphs / Diagrams ──────────────────────
                 for img in page.images:
@@ -216,72 +215,94 @@ class GraphBuilder:
 
     def _store_parameter(
         self, session, component: str, table_uid: str, param: ParameterRow
-    ):
+    ) -> int:
         """Store a single parameter with its values, unit, and conditions.
 
         The param uid includes both the parameter name AND the condition so
         that multi-condition rows (e.g. TA=25°C and TA=70°C for the same
         parameter) are stored as distinct nodes instead of colliding on MERGE.
         """
-        # Include condition in uid to avoid MERGE collision for multi-row params
+        entries = self._build_parameter_entries(param)
+        if not entries:
+            logger.debug(
+                "Skipping incomplete parameter row: parameter=%r unit=%r values=%r",
+                param.parameter,
+                param.unit,
+                param.values,
+            )
+            return 0
+
         condition_key = param.conditions.replace(" ", "") if param.conditions else "nocond"
-        param_uid = f"{table_uid}::{param.parameter}::{condition_key}"
         norm_name = normalize_lookup_text(param.parameter)
+        stored_count = 0
 
-        session.run(
-            """
-            MATCH (c:Component {name: $component})
-            MATCH (tbl:Table {uid: $table_uid})
-            MERGE (p:Parameter {uid: $param_uid})
-            SET p.name = $name,
-                p.norm_name = $norm_name,
-                p.symbol = $symbol,
-                p.condition = $condition
-            MERGE (c)-[:HAS_PARAMETER]->(p)
-            MERGE (p)-[:BELONGS_TO]->(tbl)
-            """,
-            component=component,
-            table_uid=table_uid,
-            param_uid=param_uid,
-            name=param.parameter,
-            norm_name=norm_name,
-            symbol=param.symbol,
-            condition=param.conditions,
-        )
+        for entry in entries:
+            value_type = entry["value_type"]
+            value = entry["value"]
+            unit = entry["unit"]
+            param_uid = f"{table_uid}::{param.parameter}::{condition_key}::{value_type}"
+            value_uid = f"{param_uid}::value"
 
-        # Create Value nodes (one per value column)
-        for val_type, val_str in param.values.items():
-            if not val_str:
-                continue
             session.run(
                 """
-                MATCH (p:Parameter {uid: $param_uid})
-                MERGE (v:Value {
-                    value: $value,
-                    value_type: $value_type,
-                    condition: $condition
-                })
+                MATCH (c:Component {name: $component})
+                MATCH (tbl:Table {uid: $table_uid})
+                MERGE (p:Parameter {uid: $param_uid})
+                SET p.name = $name,
+                    p.norm_name = $norm_name,
+                    p.symbol = $symbol,
+                    p.condition = $condition,
+                    p.value = $value,
+                    p.unit = $unit,
+                    p.component = $component,
+                    p.value_type = $value_type
+                MERGE (c)-[:HAS_PARAMETER]->(p)
+                MERGE (p)-[:BELONGS_TO]->(tbl)
+                MERGE (v:Value {uid: $value_uid})
+                SET v.value = $value,
+                    v.value_type = $value_type,
+                    v.condition = $condition
                 MERGE (p)-[:HAS_VALUE]->(v)
+                MERGE (u:Unit {name: $unit})
+                MERGE (v)-[:HAS_UNIT]->(u)
                 """,
+                component=component,
+                table_uid=table_uid,
                 param_uid=param_uid,
-                value=val_str,
-                value_type=val_type,
+                value_uid=value_uid,
+                name=param.parameter,
+                norm_name=norm_name,
+                symbol=param.symbol,
                 condition=param.conditions,
+                value=value,
+                unit=unit,
+                value_type=value_type,
             )
+            stored_count += 1
 
-            # Unit node (shared across the graph)
-            if param.unit:
-                session.run(
-                    """
-                    MATCH (p:Parameter {uid: $param_uid})-[:HAS_VALUE]->(v:Value {value: $value, value_type: $value_type})
-                    MERGE (u:Unit {name: $unit})
-                    MERGE (v)-[:HAS_UNIT]->(u)
-                    """,
-                    param_uid=param_uid,
-                    value=val_str,
-                    value_type=val_type,
-                    unit=param.unit,
-                )
+        return stored_count
+
+    @staticmethod
+    def _build_parameter_entries(param: ParameterRow) -> list[dict[str, str]]:
+        """Return only complete value rows that can be stored and queried."""
+        parameter = (param.parameter or "").strip()
+        unit = (param.unit or "").strip()
+        if not parameter or not unit:
+            return []
+
+        entries: list[dict[str, str]] = []
+        for value_type, raw_value in param.values.items():
+            value = (raw_value or "").strip()
+            if not value:
+                continue
+            entries.append(
+                {
+                    "value_type": (value_type or "value").strip() or "value",
+                    "value": value,
+                    "unit": unit,
+                }
+            )
+        return entries
 
     # ── Delete Helpers ───────────────────────────────────────────────
 
@@ -334,8 +355,7 @@ class GraphBuilder:
 
     def query_parameter(self, param_name: str, component: str = "") -> list[dict]:
         """
-        Query parameters by normalized name using exact match first, then
-        a deterministic CONTAINS fallback.
+        Query deterministic parameter rows and always return complete records.
         """
         normalized_param_name = normalize_lookup_text(param_name)
         normalized_component = component.strip().lower()
@@ -351,48 +371,29 @@ class GraphBuilder:
         LIMIT 5
         """
 
-        exact_cypher = f"""
-        MATCH (c:Component)-[:HAS_PARAMETER]->(p:Parameter)-[:HAS_VALUE]->(v:Value)
+        cypher = f"""
+        MATCH (c:Component)-[:HAS_PARAMETER]->(p:Parameter)
+        OPTIONAL MATCH (p)-[:HAS_VALUE]->(v:Value)
         OPTIONAL MATCH (v)-[:HAS_UNIT]->(u:Unit)
-        OPTIONAL MATCH (p)-[:BELONGS_TO]->(tbl:Table)
-        WHERE {normalized_name_expr} = $param_name
-          AND v.value IS NOT NULL AND v.value <> ''
+        WITH p,
+             c,
+             {normalized_name_expr} AS norm_name,
+             coalesce(p.value, v.value) AS row_value,
+             coalesce(p.unit, u.name) AS row_unit,
+             coalesce(p.condition, v.condition, '') AS row_condition
+        WHERE norm_name CONTAINS $param_name
+          AND row_value IS NOT NULL AND trim(row_value) <> ''
+          AND row_unit IS NOT NULL AND trim(row_unit) <> ''
         """
         if normalized_component:
-            exact_cypher += " AND toLower(c.name) CONTAINS $component"
+            cypher += " AND toLower(c.name) CONTAINS $component"
 
-        exact_cypher += """
-        RETURN c.name          AS component,
-               p.name          AS parameter,
-               p.symbol        AS symbol,
-               v.value         AS value,
-               v.value_type    AS value_type,
-               coalesce(u.name, '') AS unit,
-               v.condition     AS condition,
-               tbl.page        AS page
-        ORDER BY c.name, p.name, v.value_type
-        """
-
-        fallback_cypher = f"""
-        MATCH (c:Component)-[:HAS_PARAMETER]->(p:Parameter)-[:HAS_VALUE]->(v:Value)
-        OPTIONAL MATCH (v)-[:HAS_UNIT]->(u:Unit)
-        OPTIONAL MATCH (p)-[:BELONGS_TO]->(tbl:Table)
-        WHERE {normalized_name_expr} CONTAINS $param_name
-          AND v.value IS NOT NULL AND v.value <> ''
-        """
-        if normalized_component:
-            fallback_cypher += " AND toLower(c.name) CONTAINS $component"
-
-        fallback_cypher += """
-        RETURN c.name          AS component,
-               p.name          AS parameter,
-               p.symbol        AS symbol,
-               v.value         AS value,
-               v.value_type    AS value_type,
-               coalesce(u.name, '') AS unit,
-               v.condition     AS condition,
-               tbl.page        AS page
-        ORDER BY c.name, p.name, v.value_type
+        cypher += """
+        RETURN DISTINCT p.name AS parameter,
+                        row_value AS value,
+                        row_unit AS unit,
+                        row_condition AS condition
+        ORDER BY p.name, row_condition, row_value
         """
 
         with self.driver.session() as session:
@@ -402,31 +403,17 @@ class GraphBuilder:
             ).data()
             logger.info("Sample normalized DB values: %s", sample_rows)
 
-            exact_rows = [
+            rows = [
                 dict(r)
                 for r in session.run(
-                    exact_cypher,
+                    cypher,
                     param_name=normalized_param_name,
                     component=normalized_component,
                 )
             ]
-            logger.info("Exact normalized parameter match returned %d rows", len(exact_rows))
-            if exact_rows:
-                return exact_rows
-
-            fallback_rows = [
-                dict(r)
-                for r in session.run(
-                    fallback_cypher,
-                    param_name=normalized_param_name,
-                    component=normalized_component,
-                )
-            ]
-            logger.info(
-                "Fallback normalized parameter match returned %d rows",
-                len(fallback_rows),
-            )
-            return fallback_rows
+            logger.info("Matched %d parameter rows", len(rows))
+            logger.info("Sample returned rows: %s", rows[:5])
+            return rows
 
     @staticmethod
     def _cypher_normalize_expr(field_name: str) -> str:

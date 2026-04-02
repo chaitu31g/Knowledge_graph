@@ -25,7 +25,8 @@ _PARAMETER_INDICATORS = [
     r"output high", r"output low", r"input high", r"input low",
     r"vcc", r"vdd", r"vss", r"vee", r"gnd",
     r"absolute maximum", r"rating",
-    r"min\b", r"max\b", r"typ\b", r"typical",
+    r"min\b", r"max\b", r"typ\b",
+    # NOTE: "typical" removed — it incorrectly catches "typical applications"
     r"what is the", r"what's the", r"value of",
     r"how much", r"how many",
     r"specification", r"spec\b",
@@ -33,6 +34,7 @@ _PARAMETER_INDICATORS = [
 ]
 
 # Keywords that indicate a text/feature query
+# Each match counts as 2 so feature-type queries always beat generic parameter keywords
 _TEXT_INDICATORS = [
     r"feature", r"description", r"overview", r"application",
     r"what does", r"what is", r"explain", r"describe",
@@ -40,7 +42,7 @@ _TEXT_INDICATORS = [
     r"pin\s*out", r"package",
     r"advantage", r"benefit",
     r"compatible", r"replacement",
-    r"tell me about",
+    r"tell me about", r"use case", r"used for",
 ]
 
 
@@ -48,6 +50,9 @@ def classify_query(query: str) -> str:
     """
     Classify a user query as 'parameter' or 'text'.
     Returns "parameter" or "text".
+
+    Text indicators score 2x so that feature/application queries
+    always beat generic electrical keywords like 'voltage'.
     """
     q = query.lower().strip()
 
@@ -60,10 +65,12 @@ def classify_query(query: str) -> str:
 
     for pattern in _TEXT_INDICATORS:
         if re.search(pattern, q, re.IGNORECASE):
-            text_score += 1
+            text_score += 2  # Text indicators are weighted 2x
 
-    # Default to parameter if no clear winner
-    if param_score >= text_score:
+    logger.debug("classify_query: param=%d text=%d for: %s", param_score, text_score, query)
+
+    # Requires param to clearly outweigh text for parameter routing
+    if param_score > text_score:
         return "parameter"
     return "text"
 
@@ -87,8 +94,10 @@ def _execute_parameter_query(request: QueryRequest) -> QueryResponse:
     """
     Execute a parameter query against the knowledge graph.
     Extracts the likely parameter name from the query and searches.
+
+    NO individual-word fallback — it causes 'Input Voltage' to match
+    every parameter that contains 'voltage', returning wrong results.
     """
-    # Extract key terms from query
     search_term = _extract_search_term(request.query)
 
     results = graph_builder.query_parameter(
@@ -96,20 +105,7 @@ def _execute_parameter_query(request: QueryRequest) -> QueryResponse:
         component=request.component,
     )
 
-    if not results:
-        # Broaden search — try individual words
-        words = search_term.split()
-        for word in words:
-            if len(word) > 2:
-                results = graph_builder.query_parameter(
-                    param_name=word,
-                    component=request.component,
-                )
-                if results:
-                    break
-
     if results:
-        # Group by parameter for table display
         table_data = _results_to_table(results)
         return QueryResponse(
             type="table",
@@ -119,7 +115,7 @@ def _execute_parameter_query(request: QueryRequest) -> QueryResponse:
     else:
         return QueryResponse(
             type="text",
-            data={"message": f"No parameters found matching '{search_term}'. Try a different query."},
+            data={"message": f"No parameters found matching '{search_term}'. Try rephrasing or check available parameters."},
             source="Knowledge Graph — no match",
         )
 

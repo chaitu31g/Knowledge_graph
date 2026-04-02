@@ -83,7 +83,8 @@ Your job is to generate a clean, concise, and accurate answer based ONLY on the 
 ### FOR PARAMETER TABLES:
 1. Start with the parameter name (bold)
 2. Provide a short 1-line explanation of what this parameter means
-3. List all values clearly with conditions and units (use bullet points if multiple rows)
+3. You MUST list ALL values provided in the data. PDF tables often merge multiple values into a single cell using newlines (e.g., "0.23\\n0.18\\n0.92"). You must separate and list every single value.
+4. List values with their corresponding conditions and units. If a condition is missing or unaligned for a value, list the value anyway and just state "Condition unspecified" or pair it logically.
 
 ### FOR TEXT / DESCRIPTIONS / FEATURES / APPLICATIONS:
 1. Synthesize the provided text blocks into a clean, readable summary.

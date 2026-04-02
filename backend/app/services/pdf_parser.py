@@ -194,14 +194,36 @@ def _process_raw_table(
 
     # Data rows
     rows = []
-    for row in raw_table[1:]:
-        cells = [str(c).strip() if c else "" for c in row]
+    for row in raw_table:
+        # Clean "None" strings and strip
+        cells = [str(c).strip() if c and str(c).strip() != "None" else "" for c in row]
+        
         # Skip completely empty rows
-        if all(c == "" or c == "None" for c in cells):
+        if not any(cells):
             continue
-        # Clean "None" strings
-        cells = [c if c != "None" else "" for c in cells]
-        rows.append(cells)
+
+        # ── UNMERGE MULTILINE CELLS ──
+        # PDF parsing often fails to split rows and returns `"val1\nval2"` inside a single cell.
+        max_lines = 1
+        cell_lines = []
+        for c in cells:
+            lines = c.split('\n')
+            cell_lines.append(lines)
+            if len(lines) > max_lines:
+                max_lines = len(lines)
+                
+        # Expand out to max_lines rows
+        for line_idx in range(max_lines):
+            new_row = []
+            for lines in cell_lines:
+                if line_idx < len(lines):
+                    new_row.append(lines[line_idx].strip())
+                else:
+                    new_row.append("")
+            
+            # Use only if the row actually contains data
+            if any(new_row):
+                rows.append(new_row)
 
     if not rows:
         return None

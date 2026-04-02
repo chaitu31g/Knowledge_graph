@@ -61,3 +61,44 @@ async def component_summary(name: str):
     """Get a summary of stored data for a specific component."""
     summary = graph_builder.get_component_summary(name)
     return summary
+
+
+@router.get("/debug/graph/{component}")
+async def debug_graph(component: str):
+    """
+    Debug endpoint — returns RAW Neo4j records for a component.
+    Shows exactly what is stored: parameter names, values, units, conditions.
+    Use this to diagnose why a query returns no results.
+    """
+    with graph_builder.driver.session() as session:
+        # All parameters stored (with or without values)
+        all_params = session.run(
+            """
+            MATCH (c:Component)-[:HAS_PARAMETER]->(p:Parameter)
+            RETURN p.name AS parameter, p.symbol AS symbol,
+                   p.condition AS condition, p.uid AS uid
+            ORDER BY p.name
+            LIMIT 50
+            """,
+        ).data()
+
+        # All values stored
+        all_values = session.run(
+            """
+            MATCH (c:Component)-[:HAS_PARAMETER]->(p:Parameter)-[:HAS_VALUE]->(v:Value)
+            OPTIONAL MATCH (v)-[:HAS_UNIT]->(u:Unit)
+            WHERE toLower(c.name) CONTAINS toLower($comp)
+            RETURN p.name AS parameter, v.value AS value,
+                   u.name AS unit, v.condition AS condition
+            ORDER BY p.name
+            LIMIT 100
+            """,
+            comp=component,
+        ).data()
+
+    return {
+        "component": component,
+        "total_parameters_in_graph": len(all_params),
+        "parameter_nodes": all_params[:20],
+        "value_records": all_values,
+    }

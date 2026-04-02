@@ -33,7 +33,7 @@ def init_qwen_local():
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        model_name = "Qwen/Qwen3.5-4B"
+        model_name = "Qwen/Qwen2.5-4B-Instruct"
         _tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
         
         # Load efficiently on Colab GPU if available
@@ -48,11 +48,11 @@ def init_qwen_local():
             _model = _model.to(device)
             
         _is_loaded = True
-        logger.info(f"✅ Local Qwen 3.5 4B successfully loaded on {device}")
-    except ImportError:
-        logger.error("Failed to load Qwen: 'transformers' or 'torch' package is missing.")
+        logger.info(f"✅ Local Qwen2.5 4B-Instruct successfully loaded on {device}")
+    except ImportError as e:
+        logger.error(f"❌ Failed to load Qwen: missing package — {e}. Install with: pip install transformers torch")
     except Exception as e:
-        logger.error(f"Failed to load local Qwen model: {e}")
+        logger.error(f"❌ Failed to load local Qwen model: {type(e).__name__}: {e}")
 
 
 def is_qwen_available() -> bool:
@@ -159,9 +159,11 @@ async def format_with_qwen(query: str, structured_data: dict) -> str:
     Format data into a Chat response.
     Tries Local model first, falls back to API.
     """
-    # Short-circuit if graph returned an error/empty message
-    if isinstance(structured_data, dict) and "message" in structured_data:
-        if "no " in structured_data["message"].lower() or "error" in structured_data["message"].lower():
+    # Short-circuit ONLY if the graph explicitly returned a no-results/error message
+    # (i.e. dict with ONLY a "message" key and no real data)
+    if isinstance(structured_data, dict) and list(structured_data.keys()) == ["message"]:
+        msg = structured_data["message"].lower()
+        if "no " in msg or "not found" in msg or "error" in msg:
             return ""
 
     if not is_qwen_available():
@@ -169,8 +171,11 @@ async def format_with_qwen(query: str, structured_data: dict) -> str:
         return ""
 
     # Priority 1: Use strictly local in-process model
+    # Run in a thread pool so blocking inference doesn't stall the async event loop
     if _is_loaded:
-        return _generate_local(query, structured_data)
+        import asyncio
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, _generate_local, query, structured_data)
 
     # Priority 2: Use external HTTP API endpoint
     user_msg = _build_user_message(query, structured_data)

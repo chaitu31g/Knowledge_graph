@@ -160,20 +160,37 @@ def _process_raw_table(
     if not raw_table or len(raw_table) < 2:
         return None
 
-    # First row = headers
-    headers = [str(h).strip() if h else "" for h in raw_table[0]]
+    # Smart header detection: scan first 5 rows for typical header keywords
+    headers = []
+    header_idx = 0
+    header_keywords = {"parameter", "symbol", "condition", "value", "min", "typ", "max", "unit", "characteristic", "type"}
+    
+    for i, row in enumerate(raw_table[:5]):
+        cleaned_row = [str(c).strip() if c and str(c).strip() != "None" else "" for c in row]
+        non_empty = [c for c in cleaned_row if c]
+        
+        # If row has multiple columns and header-like keywords, it's our header
+        if len(non_empty) >= 2:
+            text = " ".join(non_empty).lower()
+            if any(kw in text for kw in header_keywords):
+                headers = cleaned_row
+                header_idx = i
+                break
+                
+    if not headers:
+        # Fallback: grab the first row that isn't completely empty
+        for i, row in enumerate(raw_table[:3]):
+            cleaned_row = [str(c).strip() if c and str(c).strip() != "None" else "" for c in row]
+            if any(cleaned_row):
+                headers = cleaned_row
+                header_idx = i
+                break
 
-    # Skip tables with all-empty headers
-    if all(h == "" or h == "None" for h in headers):
-        # Try second row as header
-        if len(raw_table) >= 3:
-            headers = [str(h).strip() if h else "" for h in raw_table[1]]
-            raw_table = raw_table[1:]
-        else:
-            return None
+    if not headers:
+        return None
 
-    # Clean "None" strings
-    headers = [h if h != "None" else "" for h in headers]
+    # Data rows are everything after the header
+    raw_table = raw_table[header_idx + 1:]
 
     # Data rows
     rows = []

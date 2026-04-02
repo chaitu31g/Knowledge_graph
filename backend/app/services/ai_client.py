@@ -85,6 +85,7 @@ Your job is to generate a clean, concise, and accurate answer based ONLY on the 
 2. Provide a short 1-line explanation of what this parameter means
 3. You MUST list ALL values provided in the data. PDF tables often merge multiple values into a single cell using newlines (e.g., "0.23\\n0.18\\n0.92"). You must separate and list every single value.
 4. List values with their corresponding conditions and units. If a condition is missing or unaligned for a value, list the value anyway and just state "Condition unspecified" or pair it logically.
+5. IMPORTANT: If the data contains results for MULTIPLE different components, group your lists clearly under each component's name so the user knows which values belong to which datasheet.
 
 ### FOR TEXT / DESCRIPTIONS / FEATURES / APPLICATIONS:
 1. Synthesize the provided text blocks into a clean, readable summary.

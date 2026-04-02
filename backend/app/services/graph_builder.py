@@ -230,12 +230,12 @@ class GraphBuilder:
             session.run(
                 """
                 MATCH (p:Parameter {uid: $param_uid})
-                CREATE (v:Value {
+                MERGE (v:Value {
                     value: $value,
                     value_type: $value_type,
                     condition: $condition
                 })
-                CREATE (p)-[:HAS_VALUE]->(v)
+                MERGE (p)-[:HAS_VALUE]->(v)
                 """,
                 param_uid=param_uid,
                 value=val_str,
@@ -276,7 +276,7 @@ class GraphBuilder:
                 OPTIONAL MATCH (c)-[:HAS_TEXT]->(t:TextBlock)
                 OPTIONAL MATCH (c)-[:HAS_GRAPH]->(g:GraphImage)
                 OPTIONAL MATCH (c)-[:HAS_DIAGRAM]->(d:Diagram)
-                DETACH DELETE c, p, v, t, g, d
+                DETACH DELETE c, p, v, tbl, t, g, d
                 RETURN count(*) AS deleted
                 """,
                 name=component_name,

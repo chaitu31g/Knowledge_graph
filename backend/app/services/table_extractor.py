@@ -7,6 +7,8 @@ Handles:
 - Min/Typ/Max columns (when they exist)
 - Range values ("1.2 to 3.3")
 - Value+Unit splitting
+- Multi-row parameter entries (parameter propagation)
+- Junk/symbol row filtering
 """
 import re
 from typing import Optional
@@ -79,16 +81,75 @@ def classify_columns(headers: list[str]) -> dict[int, str]:
     return roles
 
 
+# ── Junk Filter ────────────────────────────────────────────────────────
+
+# Known garbage fragments produced by broken PDF table extraction
+_JUNK_FRAGMENTS = {
+    "limited by", "resistanc", "single puls", "parameter", "symbol",
+    "condition", "conditions", "value", "unit", "min", "typ", "max",
+    "note", "remarks", "item", "id", "vds", "vgs", "rds", "i d",
+    "v ds", "r ds(on),max",
+}
+
+
+def _is_junk_param(name: str) -> bool:
+    """
+    Return True if the parameter name is clearly a junk/symbol row
+    that should not be stored as a real parameter.
+    """
+    n = name.strip().lower()
+
+    # Empty
+    if not n:
+        return True
+
+    # Known garbage fragments (exact match)
+    if n in _JUNK_FRAGMENTS:
+        return True
+
+    # Pure electrical symbols: 1–6 chars, all uppercase + digits/brackets
+    # e.g. "ID", "VGS", "VDS", "RDS", "CISS"
+    if re.match(r'^[A-Z][A-Z0-9()\-]{0,5}$', name.strip()):
+        return True
+
+    # Starts with a known symbol prefix pattern like "I D", "V DS"
+    if re.match(r'^[IVRCQP]\s+[A-Z]', name.strip()):
+        return True
+
+    return False
+
+
+# ── Parameter Extraction ───────────────────────────────────────────────
+
 def extract_parameters(table: ExtractedTable) -> list[ParameterRow]:
     """
     Extract structured ParameterRow objects from a table.
     Fully dynamic — adapts to whatever columns exist.
+
+    Key behaviours:
+    - Parameter propagation: if a row has no parameter cell, it inherits
+      the last seen parameter. This handles multi-row entries like:
+
+        Continuous drain current | ID | TA=25°C | 0.23 | A
+                                 |    | TA=70°C | 0.18 |
+
+      Both rows are captured, the second inheriting the parameter + unit.
+
+    - Symbol carry-forward: symbol (e.g. ID) persists across continuation rows.
+    - Unit carry-forward: unit persists when continuation rows omit it.
+    - Junk filtering: skips rows that are pure symbols or garbage fragments
+      (e.g. "I D", "V DS", "limited by", "resistanc", "single puls").
     """
     if not table.headers or not table.rows:
         return []
 
     roles = classify_columns(table.headers)
     results: list[ParameterRow] = []
+
+    # ── Carry-forward state ─────────────────────────────────────────
+    last_param: str = ""
+    last_symbol: str = ""
+    last_unit: str = ""
 
     for row in table.rows:
         # Build raw_cells mapping
@@ -135,8 +196,40 @@ def extract_parameters(table: ExtractedTable) -> list[ParameterRow]:
                 header_name = table.headers[idx] if idx < len(table.headers) else f"col_{idx}"
                 values[header_name] = cell
 
-        # Skip rows with no parameter name
-        if not param_name:
+        # ── Parameter propagation ───────────────────────────────────
+        if param_name:
+            # This row introduces a new parameter — filter junk first
+            if _is_junk_param(param_name):
+                continue
+            # Update carry-forward state
+            last_param = param_name
+            if symbol:
+                last_symbol = symbol
+            if unit:
+                last_unit = unit
+        else:
+            # Continuation row — inherit last seen parameter context
+            if not last_param:
+                continue  # No parameter context yet — skip
+            param_name = last_param
+            if not symbol:
+                symbol = last_symbol
+            if not unit:
+                unit = last_unit
+
+        # Refresh carry-forward if this row provided new symbol/unit
+        if unit:
+            last_unit = unit
+        if symbol:
+            last_symbol = symbol
+
+        # Skip pure parameter-name rows with no values/conditions
+        # (they only serve to set carry-forward state)
+        if not values and not conditions:
+            continue
+
+        # Skip rows that have values but no unit — incomplete, can't store
+        if values and not unit:
             continue
 
         results.append(ParameterRow(

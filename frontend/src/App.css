@@ -633,6 +633,11 @@
   cursor: pointer;
 }
 
+.chat-component-select option {
+  background: #ffffff;
+  color: #111111;
+}
+
 /* Messages Area */
 
 .chat-messages {

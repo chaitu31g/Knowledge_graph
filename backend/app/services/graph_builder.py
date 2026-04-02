@@ -31,9 +31,6 @@ _NORM_REMOVE_CHARS = [
     "\r",
     "\n",
     "\t",
-    " ",
-    "/",
-    "-",
     "(",
     ")",
     "[",
@@ -371,7 +368,7 @@ class GraphBuilder:
         LIMIT 5
         """
 
-        cypher = f"""
+        base_cypher = f"""
         MATCH (c:Component)-[:HAS_PARAMETER]->(p:Parameter)
         OPTIONAL MATCH (p)-[:HAS_VALUE]->(v:Value)
         OPTIONAL MATCH (v)-[:HAS_UNIT]->(u:Unit)
@@ -386,9 +383,34 @@ class GraphBuilder:
           AND row_unit IS NOT NULL AND trim(row_unit) <> ''
         """
         if normalized_component:
-            cypher += " AND toLower(c.name) CONTAINS $component"
+            base_cypher += " AND toLower(c.name) CONTAINS $component"
 
-        cypher += """
+        base_cypher += """
+        RETURN DISTINCT p.name AS parameter,
+                        row_value AS value,
+                        row_unit AS unit,
+                        row_condition AS condition
+        ORDER BY p.name, row_condition, row_value
+        """
+
+        keyword_fallback_cypher = f"""
+        MATCH (c:Component)-[:HAS_PARAMETER]->(p:Parameter)
+        OPTIONAL MATCH (p)-[:HAS_VALUE]->(v:Value)
+        OPTIONAL MATCH (v)-[:HAS_UNIT]->(u:Unit)
+        WITH p,
+             c,
+             {normalized_name_expr} AS norm_name,
+             coalesce(p.value, v.value) AS row_value,
+             coalesce(p.unit, u.name) AS row_unit,
+             coalesce(p.condition, v.condition, '') AS row_condition
+        WHERE all(keyword IN $keywords WHERE norm_name CONTAINS keyword)
+          AND row_value IS NOT NULL AND trim(row_value) <> ''
+          AND row_unit IS NOT NULL AND trim(row_unit) <> ''
+        """
+        if normalized_component:
+            keyword_fallback_cypher += " AND toLower(c.name) CONTAINS $component"
+
+        keyword_fallback_cypher += """
         RETURN DISTINCT p.name AS parameter,
                         row_value AS value,
                         row_unit AS unit,
@@ -406,12 +428,30 @@ class GraphBuilder:
             rows = [
                 dict(r)
                 for r in session.run(
-                    cypher,
+                    base_cypher,
                     param_name=normalized_param_name,
                     component=normalized_component,
                 )
             ]
-            logger.info("Matched %d parameter rows", len(rows))
+            logger.info("Primary normalized match returned %d rows", len(rows))
+
+            if not rows:
+                keywords = [keyword for keyword in normalized_param_name.split(" ") if keyword]
+                if keywords:
+                    rows = [
+                        dict(r)
+                        for r in session.run(
+                            keyword_fallback_cypher,
+                            keywords=keywords,
+                            component=normalized_component,
+                        )
+                    ]
+                    logger.info(
+                        "Keyword fallback match returned %d rows for keywords=%s",
+                        len(rows),
+                        keywords,
+                    )
+
             logger.info("Sample returned rows: %s", rows[:5])
             return rows
 
@@ -419,9 +459,14 @@ class GraphBuilder:
     def _cypher_normalize_expr(field_name: str) -> str:
         """Build a Cypher normalization expression for legacy rows."""
         expr = f"toLower(trim(coalesce({field_name}, '')))"
+        expr = f"replace(replace(replace({expr}, '\\r', ' '), '\\n', ' '), '\\t', ' ')"
+        expr = f"replace(replace(replace(replace({expr}, ' / ', ''), ' /', ''), '/ ', ''), '/', '')"
+        expr = f"replace(replace(replace(replace({expr}, ' - ', ''), ' -', ''), '- ', ''), '-', '')"
         for char in _NORM_REMOVE_CHARS:
             escaped = char.replace("\\", "\\\\").replace("'", "\\'")
-            expr = f"replace({expr}, '{escaped}', '')"
+            expr = f"replace({expr}, '{escaped}', ' ')"
+        expr = f"replace(replace(replace(replace({expr}, '  ', ' '), '  ', ' '), '  ', ' '), '  ', ' ')"
+        expr = f"trim({expr})"
         return expr
 
     def _ensure_parameter_norm_names(self):
@@ -431,7 +476,7 @@ class GraphBuilder:
             updated = session.run(
                 f"""
                 MATCH (p:Parameter)
-                WHERE p.norm_name IS NULL OR p.norm_name = ''
+                WHERE p.norm_name IS NULL OR p.norm_name <> {cypher_norm_name}
                 SET p.norm_name = {cypher_norm_name}
                 RETURN count(p) AS updated
                 """

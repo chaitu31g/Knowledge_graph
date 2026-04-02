@@ -110,3 +110,18 @@ export async function getComponents() {
   const res = await getClient().get('/api/components')
   return res.data.components || []
 }
+
+export async function deleteComponent(name) {
+  const res = await getClient().delete(`/api/component/${encodeURIComponent(name)}`)
+  return res.data
+}
+
+export async function clearAllData() {
+  const res = await getClient().delete('/api/graph/clear')
+  return res.data
+}
+
+export async function getDebugInfo(component) {
+  const res = await getClient().get(`/api/debug/graph/${encodeURIComponent(component)}`)
+  return res.data
+}

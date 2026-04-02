@@ -63,26 +63,52 @@ async def component_summary(name: str):
     return summary
 
 
+@router.delete("/component/{name}")
+async def delete_component(name: str):
+    """
+    Delete a specific component and ALL its associated data from the graph.
+    Removes: Component, Parameter, Value, Unit, Condition, Table, TextBlock nodes.
+    """
+    deleted = graph_builder.delete_component(name)
+    return {
+        "status": "deleted",
+        "component": name,
+        "nodes_deleted": deleted,
+    }
+
+
+@router.delete("/graph/clear")
+async def clear_all():
+    """
+    ⚠️ Delete EVERYTHING from the graph.
+    Use with caution — this removes all components and their data.
+    """
+    deleted = graph_builder.clear_all()
+    return {
+        "status": "cleared",
+        "nodes_deleted": deleted,
+    }
+
+
 @router.get("/debug/graph/{component}")
 async def debug_graph(component: str):
     """
     Debug endpoint — returns RAW Neo4j records for a component.
     Shows exactly what is stored: parameter names, values, units, conditions.
-    Use this to diagnose why a query returns no results.
     """
     with graph_builder.driver.session() as session:
-        # All parameters stored (with or without values)
         all_params = session.run(
             """
             MATCH (c:Component)-[:HAS_PARAMETER]->(p:Parameter)
+            WHERE toLower(c.name) CONTAINS toLower($comp)
             RETURN p.name AS parameter, p.symbol AS symbol,
-                   p.condition AS condition, p.uid AS uid
+                   p.condition AS condition
             ORDER BY p.name
             LIMIT 50
             """,
+            comp=component,
         ).data()
 
-        # All values stored
         all_values = session.run(
             """
             MATCH (c:Component)-[:HAS_PARAMETER]->(p:Parameter)-[:HAS_VALUE]->(v:Value)
@@ -99,6 +125,6 @@ async def debug_graph(component: str):
     return {
         "component": component,
         "total_parameters_in_graph": len(all_params),
-        "parameter_nodes": all_params[:20],
+        "parameter_nodes_sample": all_params[:20],
         "value_records": all_values,
     }

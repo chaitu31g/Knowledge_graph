@@ -2,23 +2,22 @@ import { useState, useEffect } from 'react'
 import { healthCheck, getBackendUrl, setBackendUrl } from './api'
 import UploadComponent from './components/UploadComponent'
 import ChatbotComponent from './components/ChatbotComponent'
+import DataManagerComponent from './components/DataManagerComponent'
 import './App.css'
 
 /**
  * App — Main application shell.
- * Updated to a Chat-centric layout for AI Datasheet Querying.
  */
 export default function App() {
   const [backendStatus, setBackendStatus] = useState('pending')
   const [neo4jStatus, setNeo4jStatus] = useState('pending')
   const [qwenStatus, setQwenStatus] = useState('disconnected')
+  const [dataVersion, setDataVersion] = useState(0)
 
-  // Backend URL settings
   const [backendUrl, setBackendUrlState] = useState(getBackendUrl())
   const [urlInput, setUrlInput] = useState(getBackendUrl())
   const [settingsOpen, setSettingsOpen] = useState(false)
 
-  // Health check function
   const checkHealth = async () => {
     try {
       const data = await healthCheck()
@@ -33,14 +32,12 @@ export default function App() {
     }
   }
 
-  // Check health on mount and when URL changes
   useEffect(() => {
     checkHealth()
     const interval = setInterval(checkHealth, 30000)
     return () => clearInterval(interval)
   }, [backendUrl])
 
-  // Save new URL
   const handleSaveUrl = () => {
     const cleaned = urlInput.trim().replace(/\/+$/, '')
     if (!cleaned) return
@@ -50,18 +47,18 @@ export default function App() {
     setTimeout(checkHealth, 100)
   }
 
+  const handleDataChanged = () => setDataVersion(v => v + 1)
+
   return (
     <div className="app">
-      {/* Header */}
       <header className="app-header">
         <div className="logo-icon">⚛</div>
         <h1>DatasheetIQ</h1>
         <p className="subtitle">
-          Upload semiconductor datasheets — query specs using AI & Knowledge Graph
+          Upload semiconductor datasheets — query specs using AI &amp; Knowledge Graph
         </p>
       </header>
 
-      {/* Backend URL Settings */}
       <div className="settings-bar">
         <button
           className="settings-toggle"
@@ -84,27 +81,26 @@ export default function App() {
                 onKeyDown={(e) => e.key === 'Enter' && handleSaveUrl()}
               />
               <button onClick={handleSaveUrl} id="save-url-btn">
-                Save & Connect
+                Save &amp; Connect
               </button>
             </div>
           </div>
         )}
       </div>
 
-      {/* Status Bar */}
       <div className="status-bar">
         <div><span className={`status-dot ${backendStatus}`} />Backend API</div>
         <div><span className={`status-dot ${neo4jStatus}`} />Neo4j Graph</div>
-        <div><span className={`status-dot ${qwenStatus}`} />Qwen 3.5 4B {qwenStatus === 'disconnected' && '(offline)'}</div>
+        <div><span className={`status-dot ${qwenStatus}`} />Qwen AI {qwenStatus === 'disconnected' && '(offline)'}</div>
       </div>
 
-      {/* Sidebar-style Layout */}
       <div className="main-layout">
         <div className="upload-sidebar">
-          <UploadComponent onUploadComplete={() => {}} />
+          <UploadComponent onUploadComplete={handleDataChanged} />
+          <DataManagerComponent key={dataVersion} onDataChanged={handleDataChanged} />
         </div>
         <div className="chat-main">
-          <ChatbotComponent />
+          <ChatbotComponent key={dataVersion} />
         </div>
       </div>
     </div>

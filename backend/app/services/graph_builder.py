@@ -257,6 +257,47 @@ class GraphBuilder:
                     unit=param.unit,
                 )
 
+    # ── Delete Helpers ───────────────────────────────────────────────
+
+    def delete_component(self, component_name: str) -> int:
+        """
+        Delete a component and ALL its associated nodes from the graph.
+        Cascades through: Parameter → Value → Unit, Table, TextBlock, etc.
+        Returns the count of nodes deleted.
+        """
+        with self.driver.session() as session:
+            result = session.run(
+                """
+                MATCH (c:Component {name: $name})
+                OPTIONAL MATCH (c)-[:HAS_PARAMETER]->(p:Parameter)
+                OPTIONAL MATCH (p)-[:HAS_VALUE]->(v:Value)
+                OPTIONAL MATCH (v)-[:HAS_UNIT]->(u:Unit)
+                OPTIONAL MATCH (p)-[:BELONGS_TO]->(tbl:Table)
+                OPTIONAL MATCH (c)-[:HAS_TEXT]->(t:TextBlock)
+                OPTIONAL MATCH (c)-[:HAS_GRAPH]->(g:GraphImage)
+                OPTIONAL MATCH (c)-[:HAS_DIAGRAM]->(d:Diagram)
+                DETACH DELETE c, p, v, t, g, d
+                RETURN count(*) AS deleted
+                """,
+                name=component_name,
+            ).single()
+            deleted = result["deleted"] if result else 0
+            logger.info("Deleted component '%s': %d nodes removed", component_name, deleted)
+            return deleted
+
+    def clear_all(self) -> int:
+        """
+        Delete EVERYTHING from the graph — all nodes and relationships.
+        Returns count of deleted nodes.
+        """
+        with self.driver.session() as session:
+            result = session.run(
+                "MATCH (n) DETACH DELETE n RETURN count(*) AS deleted"
+            ).single()
+            deleted = result["deleted"] if result else 0
+            logger.warning("⚠️  Cleared entire graph: %d nodes deleted", deleted)
+            return deleted
+
     # ── Query Helpers ───────────────────────────────────────────────
 
     def get_all_components(self) -> list[str]:

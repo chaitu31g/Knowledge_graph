@@ -21,10 +21,16 @@ def execute_query(request: QueryRequest) -> QueryResponse:
     we search BOTH and pass the combined context to the AI.
     """
     search_term = _extract_search_term(request.query)
-    logger.info("Unified query executing for: '%s' (component: %s)", search_term, request.component)
+    normalized_search_term = _normalize_lookup_text(search_term)
+    logger.info(
+        "Unified query executing for: '%s' (normalized: '%s', component: %s)",
+        search_term,
+        normalized_search_term,
+        request.component,
+    )
 
     param_results = graph_builder.query_parameter(
-        param_name=search_term,
+        param_name=normalized_search_term,
         component=request.component,
     )
 
@@ -105,6 +111,11 @@ def _extract_search_term(query: str) -> str:
     q = re.sub(r"\s+for this (component|chip|ic|device)$", "", q, flags=re.IGNORECASE)
 
     return q.strip()
+
+
+def _normalize_lookup_text(query: str) -> str:
+    """Normalize a lookup string before sending it to Neo4j."""
+    return " ".join(query.split()).strip().lower()
 
 
 def _results_to_table(results: list[dict]) -> dict:

@@ -308,36 +308,98 @@ class GraphBuilder:
 
     def query_parameter(self, param_name: str, component: str = "") -> list[dict]:
         """
-        Query parameters by name (case-insensitive contains).
-        Returns only rows that have a valid value AND unit.
-        Condition is read directly from the Value node (stored at ingest time).
+        Query parameters by name using normalized exact match first, then
+        a normalized partial-match fallback.
         """
-        cypher = """
+        normalized_param_name = self._normalize_lookup_text(param_name)
+        normalized_component = self._normalize_lookup_text(component)
+        normalized_name_expr = (
+            "toLower(trim("
+            "replace(replace(replace(replace(replace(replace(p.name, '\\r', ' '), '\\n', ' '), '  ', ' '), '  ', ' '), '  ', ' '), '  ', ' ')"
+            "))"
+        )
+        normalized_component_expr = (
+            "toLower(trim("
+            "replace(replace(replace(replace(replace(replace(c.name, '\\r', ' '), '\\n', ' '), '  ', ' '), '  ', ' '), '  ', ' '), '  ', ' ')"
+            "))"
+        )
+        logger.info("Normalized parameter query: '%s'", normalized_param_name)
+
+        exact_cypher = f"""
         MATCH (c:Component)-[:HAS_PARAMETER]->(p:Parameter)-[:HAS_VALUE]->(v:Value)
-        MATCH (v)-[:HAS_UNIT]->(u:Unit)
+        OPTIONAL MATCH (v)-[:HAS_UNIT]->(u:Unit)
         OPTIONAL MATCH (p)-[:BELONGS_TO]->(tbl:Table)
-        WHERE toLower(p.name) CONTAINS toLower($param_name)
-          AND u.name IS NOT NULL AND u.name <> ''
+        WHERE {normalized_name_expr} = $param_name
           AND v.value IS NOT NULL AND v.value <> ''
         """
-        if component:
-            cypher += " AND toLower(c.name) CONTAINS toLower($component)"
+        if normalized_component:
+            exact_cypher += f" AND {normalized_component_expr} CONTAINS $component"
 
-        cypher += """
+        exact_cypher += """
         RETURN c.name          AS component,
                p.name          AS parameter,
                p.symbol        AS symbol,
                v.value         AS value,
                v.value_type    AS value_type,
-               u.name          AS unit,
+               coalesce(u.name, '') AS unit,
+               v.condition     AS condition,
+               tbl.page        AS page
+        ORDER BY c.name, p.name, v.value_type
+        """
+
+        fallback_cypher = f"""
+        MATCH (c:Component)-[:HAS_PARAMETER]->(p:Parameter)-[:HAS_VALUE]->(v:Value)
+        OPTIONAL MATCH (v)-[:HAS_UNIT]->(u:Unit)
+        OPTIONAL MATCH (p)-[:BELONGS_TO]->(tbl:Table)
+        WHERE {normalized_name_expr} CONTAINS $param_name
+          AND v.value IS NOT NULL AND v.value <> ''
+        """
+        if normalized_component:
+            fallback_cypher += f" AND {normalized_component_expr} CONTAINS $component"
+
+        fallback_cypher += """
+        RETURN c.name          AS component,
+               p.name          AS parameter,
+               p.symbol        AS symbol,
+               v.value         AS value,
+               v.value_type    AS value_type,
+               coalesce(u.name, '') AS unit,
                v.condition     AS condition,
                tbl.page        AS page
         ORDER BY c.name, p.name, v.value_type
         """
 
         with self.driver.session() as session:
-            result = session.run(cypher, param_name=param_name, component=component)
-            return [dict(r) for r in result]
+            exact_rows = [
+                dict(r)
+                for r in session.run(
+                    exact_cypher,
+                    param_name=normalized_param_name,
+                    component=normalized_component,
+                )
+            ]
+            logger.info("Exact normalized parameter match returned %d rows", len(exact_rows))
+            if exact_rows:
+                return exact_rows
+
+            fallback_rows = [
+                dict(r)
+                for r in session.run(
+                    fallback_cypher,
+                    param_name=normalized_param_name,
+                    component=normalized_component,
+                )
+            ]
+            logger.info(
+                "Fallback normalized parameter match returned %d rows",
+                len(fallback_rows),
+            )
+            return fallback_rows
+
+    @staticmethod
+    def _normalize_lookup_text(value: str) -> str:
+        """Normalize lookup text for deterministic string matching."""
+        return " ".join((value or "").split()).strip().lower()
 
     def query_text(self, search_term: str, component: str = "") -> list[dict]:
         """

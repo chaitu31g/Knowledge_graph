@@ -194,16 +194,24 @@ class GraphBuilder:
     def _store_parameter(
         self, session, component: str, table_uid: str, param: ParameterRow
     ):
-        """Store a single parameter with its values, unit, and conditions."""
-        # Create Parameter node
-        param_uid = f"{table_uid}::{param.parameter}"
+        """Store a single parameter with its values, unit, and conditions.
+
+        The param uid includes both the parameter name AND the condition so
+        that multi-condition rows (e.g. TA=25°C and TA=70°C for the same
+        parameter) are stored as distinct nodes instead of colliding on MERGE.
+        """
+        # Include condition in uid to avoid MERGE collision for multi-row params
+        condition_key = param.conditions.replace(" ", "") if param.conditions else "nocond"
+        param_uid = f"{table_uid}::{param.parameter}::{condition_key}"
+
         session.run(
             """
             MATCH (c:Component {name: $component})
             MATCH (tbl:Table {uid: $table_uid})
             MERGE (p:Parameter {uid: $param_uid})
             SET p.name = $name,
-                p.symbol = $symbol
+                p.symbol = $symbol,
+                p.condition = $condition
             MERGE (c)-[:HAS_PARAMETER]->(p)
             MERGE (p)-[:BELONGS_TO]->(tbl)
             """,
@@ -212,6 +220,7 @@ class GraphBuilder:
             param_uid=param_uid,
             name=param.parameter,
             symbol=param.symbol,
+            condition=param.conditions,
         )
 
         # Create Value nodes (one per value column)
@@ -223,16 +232,18 @@ class GraphBuilder:
                 MATCH (p:Parameter {uid: $param_uid})
                 CREATE (v:Value {
                     value: $value,
-                    value_type: $value_type
+                    value_type: $value_type,
+                    condition: $condition
                 })
                 CREATE (p)-[:HAS_VALUE]->(v)
                 """,
                 param_uid=param_uid,
                 value=val_str,
                 value_type=val_type,
+                condition=param.conditions,
             )
 
-            # Unit node (shared)
+            # Unit node (shared across the graph)
             if param.unit:
                 session.run(
                     """
@@ -246,18 +257,6 @@ class GraphBuilder:
                     unit=param.unit,
                 )
 
-        # Condition node
-        if param.conditions:
-            session.run(
-                """
-                MATCH (p:Parameter {uid: $param_uid})
-                MERGE (cond:Condition {description: $cond})
-                MERGE (p)-[:HAS_CONDITION]->(cond)
-                """,
-                param_uid=param_uid,
-                cond=param.conditions,
-            )
-
     # ── Query Helpers ───────────────────────────────────────────────
 
     def get_all_components(self) -> list[str]:
@@ -269,28 +268,29 @@ class GraphBuilder:
     def query_parameter(self, param_name: str, component: str = "") -> list[dict]:
         """
         Query parameters by name (case-insensitive contains).
-        Returns structured results.
+        Returns only rows that have a valid value AND unit.
+        Condition is read directly from the Value node (stored at ingest time).
         """
         cypher = """
         MATCH (c:Component)-[:HAS_PARAMETER]->(p:Parameter)-[:HAS_VALUE]->(v:Value)
-        OPTIONAL MATCH (v)-[:HAS_UNIT]->(u:Unit)
-        OPTIONAL MATCH (p)-[:HAS_CONDITION]->(cond:Condition)
+        MATCH (v)-[:HAS_UNIT]->(u:Unit)
         OPTIONAL MATCH (p)-[:BELONGS_TO]->(tbl:Table)
         WHERE toLower(p.name) CONTAINS toLower($param_name)
+          AND u.name IS NOT NULL AND u.name <> ''
+          AND v.value IS NOT NULL AND v.value <> ''
         """
         if component:
             cypher += " AND toLower(c.name) CONTAINS toLower($component)"
 
         cypher += """
-        RETURN c.name AS component,
-               p.name AS parameter,
-               p.symbol AS symbol,
-               v.value AS value,
-               v.value_type AS value_type,
-               u.name AS unit,
-               cond.description AS condition,
-               tbl.section AS table_section,
-               tbl.page AS page
+        RETURN c.name          AS component,
+               p.name          AS parameter,
+               p.symbol        AS symbol,
+               v.value         AS value,
+               v.value_type    AS value_type,
+               u.name          AS unit,
+               v.condition     AS condition,
+               tbl.page        AS page
         ORDER BY c.name, p.name, v.value_type
         """
 

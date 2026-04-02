@@ -183,40 +183,26 @@ def _extract_search_term(query: str) -> str:
 
 def _results_to_table(results: list[dict]) -> dict:
     """
-    Convert graph query results into a dynamic table structure.
-    Columns are determined by the data — never hardcoded.
+    Convert graph query results into a clean table.
+    Each result row is one complete record: parameter + value + unit + condition.
+    Condition is now carried directly on the row (not merged from a shared node).
     """
-    # Discover all unique value_types across results
-    value_types = set()
+    columns = ["component", "parameter", "symbol", "value", "unit", "condition", "page"]
+
+    rows = []
     for r in results:
-        if r.get("value_type"):
-            value_types.add(r["value_type"])
-
-    # Build columns dynamically
-    base_columns = ["component", "parameter", "symbol"]
-    value_columns = sorted(value_types) if value_types else ["value"]
-    extra_columns = ["unit", "condition", "page"]
-
-    columns = base_columns + value_columns + extra_columns
-
-    # Group results by (component, parameter) to merge value types
-    grouped: dict[tuple, dict] = {}
-    for r in results:
-        key = (r["component"], r["parameter"])
-        if key not in grouped:
-            grouped[key] = {
-                "component": r["component"],
-                "parameter": r["parameter"],
-                "symbol": r.get("symbol") or "",
-                "unit": r.get("unit") or "",
-                "condition": r.get("condition") or "",
-                "page": r.get("page") or "",
-            }
-        # Fill in value by type
-        vtype = r.get("value_type", "value")
-        grouped[key][vtype] = r.get("value", "")
-
-    rows = list(grouped.values())
+        # Only include rows that actually have a value and unit
+        if not r.get("value") or not r.get("unit"):
+            continue
+        rows.append({
+            "component":  r.get("component") or "",
+            "parameter":  r.get("parameter") or "",
+            "symbol":     r.get("symbol") or "",
+            "value":      r.get("value") or "",
+            "unit":       r.get("unit") or "",
+            "condition":  r.get("condition") or "",
+            "page":       r.get("page") or "",
+        })
 
     return {
         "columns": columns,

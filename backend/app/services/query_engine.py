@@ -68,8 +68,8 @@ def execute_query(request: QueryRequest) -> QueryResponse:
         combined_data["images"] = combined_images
 
     sources = []
-    if param_results:
-        sources.append(f"{len(param_results)} parameter rows")
+    if param_results and combined_data.get("table", {}).get("rows"):
+        sources.append(f"{len(combined_data['table']['rows'])} parameter rows")
     if text_results:
         sources.append(f"{len(text_results)} text blocks")
     if image_results:
@@ -116,11 +116,14 @@ def _results_to_table(results: list[dict]) -> dict:
     columns = ["component", "parameter", "symbol", "value", "unit", "condition", "page"]
 
     rows = []
+    seen = set()
+    
     for r in results:
         # Only include rows that actually have a value and unit
         if not r.get("value") or not r.get("unit"):
             continue
-        rows.append({
+            
+        record = {
             "component":  r.get("component") or "",
             "parameter":  r.get("parameter") or "",
             "symbol":     r.get("symbol") or "",
@@ -128,7 +131,13 @@ def _results_to_table(results: list[dict]) -> dict:
             "unit":       r.get("unit") or "",
             "condition":  r.get("condition") or "",
             "page":       r.get("page") or "",
-        })
+        }
+        
+        # Create a unique fingerprint for deduplication
+        fingerprint = f"{record['component']}|{record['parameter']}|{record['value']}|{record['condition']}"
+        if fingerprint not in seen:
+            seen.add(fingerprint)
+            rows.append(record)
 
     return {
         "columns": columns,

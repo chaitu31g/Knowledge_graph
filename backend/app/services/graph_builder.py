@@ -364,6 +364,34 @@ class GraphBuilder:
             result = session.run(cypher, search=search_term, component=component)
             return [dict(r) for r in result]
 
+    def query_images(self, search_term: str, component: str = "") -> list[dict]:
+        """
+        Search for images, graphs, and diagrams by title or description.
+        """
+        cypher = """
+        MATCH (c:Component)-[:HAS_GRAPH|HAS_DIAGRAM]->(img)
+        WHERE toLower(img.title) CONTAINS toLower($search)
+           OR toLower(img.description) CONTAINS toLower($search)
+        """
+        if component:
+            cypher += " AND toLower(c.name) CONTAINS toLower($component)"
+
+        cypher += """
+        RETURN c.name AS component,
+               labels(img)[0] AS type,
+               img.title AS title,
+               img.description AS description,
+               img.x_axis AS x_axis,
+               img.y_axis AS y_axis,
+               img.page AS page
+        ORDER BY img.page
+        LIMIT 10
+        """
+
+        with self.driver.session() as session:
+            result = session.run(cypher, search=search_term, component=component)
+            return [dict(r) for r in result]
+
     def get_component_summary(self, component: str) -> dict:
         """Get a summary of all data stored for a component."""
         with self.driver.session() as session:

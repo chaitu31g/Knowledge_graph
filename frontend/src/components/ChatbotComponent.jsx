@@ -107,6 +107,9 @@ export default function ChatbotComponent() {
               </div>
               
               {/* Show source data if present */}
+              {msg.data && msg.type === 'mixed' && msg.data.table && msg.data.table.rows?.length > 0 && (
+                <CollapsibleTable data={msg.data.table} />
+              )}
               {msg.data && msg.type === 'table' && msg.data.rows?.length > 0 && (
                 <CollapsibleTable data={msg.data} />
               )}

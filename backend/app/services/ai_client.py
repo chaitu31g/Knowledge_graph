@@ -66,7 +66,8 @@ def is_qwen_available() -> bool:
 
 SYSTEM_PROMPT = """You are an expert electronics assistant.
 
-You are given structured data extracted from a semiconductor datasheet via a Knowledge Graph.
+You are given extracted data from a semiconductor datasheet via a Knowledge Graph.
+The data may be structured parameter tables OR unstructured text sections.
 
 Your job is to generate a clean, concise, and accurate answer based ONLY on the provided data.
 
@@ -74,50 +75,63 @@ Your job is to generate a clean, concise, and accurate answer based ONLY on the 
 1. DO NOT hallucinate or guess missing values
 2. DO NOT add any external knowledge
 3. DO NOT include unrelated parameters
-4. ONLY use the provided structured data
-5. If no data is provided, respond: "No structured data found"
+4. ONLY use the provided data
+5. If the provided data is empty or irrelevant, respond exactly: "No relevant data found."
 
-## OUTPUT FORMAT
-1. Start with the parameter name (bold if possible)
+## FORMATTING RULES
+
+### FOR PARAMETER TABLES:
+1. Start with the parameter name (bold)
 2. Provide a short 1-line explanation of what this parameter means
-3. List all values clearly with conditions and units
+3. List all values clearly with conditions and units (use bullet points if multiple rows)
 
-## EXAMPLE OUTPUT
-
-**Continuous Drain Current (ID):**
-
-This parameter defines the maximum continuous current the device can handle under specified conditions.
-
-* At T_A = 25°C: 0.23 A
-* At T_A = 70°C: 0.18 A
-
-## SPECIAL CASES
-- If multiple rows exist: list them clearly with bullet points
-- If only one value: give a single clean sentence
-- If conditions are missing: just show the value with unit
-- For tables with min/typ/max: show all columns clearly
+### FOR TEXT / DESCRIPTIONS / FEATURES / APPLICATIONS:
+1. Synthesize the provided text blocks into a clean, readable summary.
+2. Group related points using bullet points.
+3. Do not invent features not explicitly stated in the text.
 """
 
 
 def _build_user_message(query: str, data: dict) -> str:
     """Build the user message with query + structured data."""
-    if "rows" in data and "columns" in data:
-        formatted_rows = []
+    formatted_context = ""
+
+    # Check if it's the new unified mixed payload
+    if "table" in data or "text" in data:
+        if "table" in data:
+            tbl = data["table"]
+            rows = []
+            for row in tbl["rows"]:
+                record = {col: row.get(col, "") for col in tbl["columns"] if row.get(col)}
+                if record:
+                    rows.append(record)
+            if rows:
+                formatted_context += f"--- PARAMETER TABLE DATA ---\n"
+                formatted_context += json.dumps(rows, indent=2) + "\n\n"
+
+        if "text" in data:
+            formatted_context += f"--- EXTRACTED TEXT BLOCKS ---\n"
+            formatted_context += data["text"].get("content", "") + "\n\n"
+
+        if "images" in data:
+            formatted_context += f"--- DIAGRAMS & GRAPHS ---\n"
+            formatted_context += data["images"] + "\n\n"
+            
+    # Legacy table fallback
+    elif "rows" in data and "columns" in data:
+        rows = []
         for row in data["rows"]:
             record = {col: row.get(col, "") for col in data["columns"] if row.get(col)}
             if record:
-                formatted_rows.append(record)
-        data_str = json.dumps({
-            "type": "parameter_table",
-            "columns": data["columns"],
-            "records": formatted_rows,
-        }, indent=2)
+                rows.append(record)
+        formatted_context = json.dumps(rows, indent=2)
+    # Generic fallback
     else:
-        data_str = json.dumps(data, indent=2)
+        formatted_context = json.dumps(data, indent=2)
 
     return (
         f"User question: {query}\n\n"
-        f"Knowledge Graph Data:\n{data_str}\n\n"
+        f"Datasheet Retrieval Context:\n{formatted_context}\n"
         f"Generate a clean, accurate answer using ONLY the data above. "
         f"Do not add any information that is not present in the data."
     )

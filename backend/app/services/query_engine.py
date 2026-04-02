@@ -12,144 +12,74 @@ from app.services.graph_builder import graph_builder
 
 logger = logging.getLogger(__name__)
 
-# ── Query Classification ────────────────────────────────────────────
-
-# Keywords that indicate a structured parameter query
-_PARAMETER_INDICATORS = [
-    r"voltage", r"current", r"power", r"frequency", r"temperature",
-    r"resistance", r"capacitance", r"inductance", r"impedance",
-    r"gain", r"offset", r"noise", r"bandwidth", r"slew rate",
-    r"propagation delay", r"rise time", r"fall time",
-    r"threshold", r"hysteresis", r"leakage",
-    r"supply", r"quiescent", r"standby", r"shutdown",
-    r"output high", r"output low", r"input high", r"input low",
-    r"vcc", r"vdd", r"vss", r"vee", r"gnd",
-    r"absolute maximum", r"rating",
-    r"min\b", r"max\b", r"typ\b",
-    # NOTE: "typical" removed — it incorrectly catches "typical applications"
-    r"what is the", r"what's the", r"value of",
-    r"how much", r"how many",
-    r"specification", r"spec\b",
-    r"ESD",
-]
-
-# Keywords that indicate a text/feature query
-# Each match counts as 2 so feature-type queries always beat generic parameter keywords
-_TEXT_INDICATORS = [
-    r"feature", r"description", r"overview", r"application",
-    r"what does", r"what is", r"explain", r"describe",
-    r"how does it work", r"purpose", r"function",
-    r"pin\s*out", r"package",
-    r"advantage", r"benefit",
-    r"compatible", r"replacement",
-    r"tell me about", r"use case", r"used for",
-]
-
-
-def classify_query(query: str) -> str:
-    """
-    Classify a user query as 'parameter' or 'text'.
-    Returns "parameter" or "text".
-
-    Text indicators score 2x so that feature/application queries
-    always beat generic electrical keywords like 'voltage'.
-    """
-    q = query.lower().strip()
-
-    param_score = 0
-    text_score = 0
-
-    for pattern in _PARAMETER_INDICATORS:
-        if re.search(pattern, q, re.IGNORECASE):
-            param_score += 1
-
-    for pattern in _TEXT_INDICATORS:
-        if re.search(pattern, q, re.IGNORECASE):
-            text_score += 2  # Text indicators are weighted 2x
-
-    logger.debug("classify_query: param=%d text=%d for: %s", param_score, text_score, query)
-
-    # Requires param to clearly outweigh text for parameter routing
-    if param_score > text_score:
-        return "parameter"
-    return "text"
-
-
 # ── Query Execution ─────────────────────────────────────────────────
 
 def execute_query(request: QueryRequest) -> QueryResponse:
     """
-    Execute a user query — classify, route, and return structured response.
-    """
-    query_type = classify_query(request.query)
-    logger.info("Query classified as '%s': %s", query_type, request.query)
-
-    if query_type == "parameter":
-        return _execute_parameter_query(request)
-    else:
-        return _execute_text_query(request)
-
-
-def _execute_parameter_query(request: QueryRequest) -> QueryResponse:
-    """
-    Execute a parameter query against the knowledge graph.
-    Extracts the likely parameter name from the query and searches.
-
-    NO individual-word fallback — it causes 'Input Voltage' to match
-    every parameter that contains 'voltage', returning wrong results.
+    Execute a unified query.
+    Instead of guessing if the user wants parameters or text,
+    we search BOTH and pass the combined context to the AI.
     """
     search_term = _extract_search_term(request.query)
+    logger.info("Unified query executing for: '%s' (component: %s)", search_term, request.component)
 
-    results = graph_builder.query_parameter(
+    param_results = graph_builder.query_parameter(
         param_name=search_term,
         component=request.component,
     )
 
-    if results:
-        table_data = _results_to_table(results)
-        return QueryResponse(
-            type="table",
-            data=table_data,
-            source=f"Knowledge Graph — matched {len(results)} records",
-        )
-    else:
-        return QueryResponse(
-            type="text",
-            data={"message": f"No parameters found matching '{search_term}'. Try rephrasing or check available parameters."},
-            source="Knowledge Graph — no match",
-        )
-
-
-def _execute_text_query(request: QueryRequest) -> QueryResponse:
-    """Execute a text/feature query."""
-    search_term = _extract_search_term(request.query)
-
-    results = graph_builder.query_text(
+    text_results = graph_builder.query_text(
         search_term=search_term,
         component=request.component,
     )
 
-    if results:
-        # Combine text blocks
-        combined = "\n\n".join(
-            f"[Page {r['page']}] {r['content']}" for r in results
-        )
+    image_results = graph_builder.query_images(
+        search_term=search_term,
+        component=request.component,
+    )
+    
+    if not param_results and not text_results and not image_results:
         return QueryResponse(
             type="text",
-            data={
-                "content": combined,
-                "sections": list(set(r["section"] for r in results if r["section"])),
-                "pages": list(set(r["page"] for r in results if r["page"])),
-            },
-            source=f"Text search — {len(results)} blocks found",
-        )
-    else:
-        return QueryResponse(
-            type="text",
-            data={"message": f"No text content found matching '{search_term}'."},
-            source="Text search — no match",
+            data={"message": f"No data found matching '{search_term}'."},
+            source="Knowledge Graph & Text Search — no match",
         )
 
+    # Build the combined data payload
+    combined_data = {}
+    
+    if param_results:
+        combined_data["table"] = _results_to_table(param_results)
+        
+    if text_results:
+        combined_text = "\n\n".join(
+            f"[Page {r['page']}, Section {r['section']}] {r['content']}" for r in text_results
+        )
+        combined_data["text"] = {
+            "content": combined_text,
+            "sections": list(set(r["section"] for r in text_results if r["section"])),
+            "pages": list(set(r["page"] for r in text_results if r["page"])),
+        }
+
+    if image_results:
+        combined_images = "\n\n".join(
+            f"[Page {r['page']}, {r['type'].upper()}]: '{r['title']}' - {r['description']}" for r in image_results
+        )
+        combined_data["images"] = combined_images
+
+    sources = []
+    if param_results:
+        sources.append(f"{len(param_results)} parameter rows")
+    if text_results:
+        sources.append(f"{len(text_results)} text blocks")
+    if image_results:
+        sources.append(f"{len(image_results)} images/graphs")
+
+    return QueryResponse(
+        type="mixed",
+        data=combined_data,
+        source="Knowledge Graph — " + ", ".join(sources),
+    )
 
 # ── Helpers ─────────────────────────────────────────────────────────
 

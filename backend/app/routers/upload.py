@@ -12,6 +12,7 @@ from app.config import settings
 from app.models import UploadResponse
 from app.services.pdf_parser import parse_pdf
 from app.services.table_extractor import extract_parameters
+from app.services.reconstructor import reconstruct_table_params
 from app.services.graph_builder import graph_builder
 
 logger = logging.getLogger(__name__)
@@ -46,7 +47,7 @@ async def upload_pdf(file: UploadFile = File(...)):
             # ── Step 1: File saved ──────────────────────────────────
             yield _sse_event({
                 "step": 1,
-                "total_steps": 6,
+                "total_steps": 7,
                 "status": "processing",
                 "message": f"📄 File received: {file.filename} ({file_size_mb:.1f} MB)",
                 "detail": "Saved to server",
@@ -56,7 +57,7 @@ async def upload_pdf(file: UploadFile = File(...)):
             # ── Step 2: Parse PDF text + images ─────────────────────
             yield _sse_event({
                 "step": 2,
-                "total_steps": 6,
+                "total_steps": 7,
                 "status": "processing",
                 "message": "🔍 Extracting text and images from PDF...",
                 "detail": "Using PyMuPDF for text blocks and image detection",
@@ -70,7 +71,7 @@ async def upload_pdf(file: UploadFile = File(...)):
 
             yield _sse_event({
                 "step": 2,
-                "total_steps": 6,
+                "total_steps": 7,
                 "status": "done",
                 "message": f"✅ Parsed {doc.total_pages} pages",
                 "detail": f"Found {total_texts} text blocks, {total_images} images, {total_tables_raw} tables",
@@ -80,7 +81,7 @@ async def upload_pdf(file: UploadFile = File(...)):
             # ── Step 3: Detect component name ───────────────────────
             yield _sse_event({
                 "step": 3,
-                "total_steps": 6,
+                "total_steps": 7,
                 "status": "processing",
                 "message": f"🏷️ Component detected: {doc.component_name or 'Unknown'}",
                 "detail": "Identified part number from header text",
@@ -90,7 +91,7 @@ async def upload_pdf(file: UploadFile = File(...)):
             # ── Step 4: Extract parameters from tables ──────────────
             yield _sse_event({
                 "step": 4,
-                "total_steps": 6,
+                "total_steps": 7,
                 "status": "processing",
                 "message": f"📊 Extracting parameters from {total_tables_raw} tables...",
                 "detail": "Dynamic column detection, value/unit splitting",
@@ -111,7 +112,7 @@ async def upload_pdf(file: UploadFile = File(...)):
 
                     yield _sse_event({
                         "step": 4,
-                        "total_steps": 6,
+                        "total_steps": 7,
                         "status": "processing",
                         "message": f"📊 Table {total_tables}: {len(params)} parameters extracted",
                         "detail": f"Page {page.page} — {len(table.headers)} columns, {len(table.rows)} rows",
@@ -121,28 +122,64 @@ async def upload_pdf(file: UploadFile = File(...)):
 
             yield _sse_event({
                 "step": 4,
-                "total_steps": 6,
+                "total_steps": 7,
                 "status": "done",
                 "message": f"✅ Extracted {total_params} parameters from {total_tables} tables",
                 "detail": "All tables processed with dynamic schema detection",
             })
             await asyncio.sleep(0.1)
 
-            # ── Step 5: Build Knowledge Graph ───────────────────────
+            # ── Step 5: Qwen Reconstruction ─────────────────────────
             yield _sse_event({
                 "step": 5,
-                "total_steps": 6,
+                "total_steps": 7,
+                "status": "processing",
+                "message": "🤖 Running Qwen reconstruction on fragmented rows...",
+                "detail": "Merging split parameters, fixing value/unit/condition alignment",
+            })
+            await asyncio.sleep(0.1)
+
+            total_before = sum(len(v) for v in parameters_by_table.values())
+            reconstructed_by_table: dict[int, list] = {}
+            table_index = 0
+
+            for page in doc.pages:
+                for table in page.tables:
+                    raw_params = parameters_by_table[table_index]
+                    # Run Qwen reconstruction in thread pool (blocking inference)
+                    import asyncio as _asyncio
+                    loop = _asyncio.get_event_loop()
+                    clean_params = await loop.run_in_executor(
+                        None, reconstruct_table_params, raw_params, table
+                    )
+                    reconstructed_by_table[table_index] = clean_params
+                    table_index += 1
+
+            total_after = sum(len(v) for v in reconstructed_by_table.values())
+            yield _sse_event({
+                "step": 5,
+                "total_steps": 7,
+                "status": "done",
+                "message": f"✅ Reconstruction complete: {total_before} → {total_after} clean rows",
+                "detail": "Fragment merging and parameter propagation applied",
+            })
+            await asyncio.sleep(0.1)
+
+            # ── Step 6: Build Knowledge Graph ───────────────────────
+            yield _sse_event({
+                "step": 6,
+                "total_steps": 7,
                 "status": "processing",
                 "message": "🧠 Building Knowledge Graph in Neo4j...",
                 "detail": "Creating Component, Parameter, Value, Unit, Condition nodes",
             })
             await asyncio.sleep(0.1)
 
-            stats = graph_builder.ingest_document(doc, parameters_by_table)
+            stats = graph_builder.ingest_document(doc, reconstructed_by_table)
 
             yield _sse_event({
-                "step": 5,
-                "total_steps": 6,
+                "step": 6,
+                "total_steps": 7,
                 "status": "done",
                 "message": f"✅ Knowledge Graph built: {stats['parameters_stored']} parameters stored",
                 "detail": f"{stats['text_blocks_stored']} text blocks, {stats['images_found']} images indexed",
@@ -162,8 +199,8 @@ async def upload_pdf(file: UploadFile = File(...)):
             }
 
             yield _sse_event({
-                "step": 6,
-                "total_steps": 6,
+                "step": 7,
+                "total_steps": 7,
                 "status": "complete",
                 "message": "🎉 Ingestion complete!",
                 "detail": f"{doc.component_name or doc.filename} is ready to query",

@@ -9,6 +9,7 @@ import re
 import logging
 from app.models import QueryRequest, QueryResponse
 from app.services.graph_builder import graph_builder
+from app.utils.normalization import normalize_lookup_text
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,7 @@ def execute_query(request: QueryRequest) -> QueryResponse:
     we search BOTH and pass the combined context to the AI.
     """
     search_term = _extract_search_term(request.query)
-    normalized_search_term = _normalize_lookup_text(search_term)
+    normalized_search_term = normalize_lookup_text(search_term)
     logger.info(
         "Unified query executing for: '%s' (normalized: '%s', component: %s)",
         search_term,
@@ -111,11 +112,6 @@ def _extract_search_term(query: str) -> str:
     q = re.sub(r"\s+for this (component|chip|ic|device)$", "", q, flags=re.IGNORECASE)
 
     return q.strip()
-
-
-def _normalize_lookup_text(query: str) -> str:
-    """Normalize a lookup string before sending it to Neo4j."""
-    return " ".join(query.split()).strip().lower()
 
 
 def _results_to_table(results: list[dict]) -> dict:

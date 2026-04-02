@@ -22,8 +22,30 @@ from neo4j import GraphDatabase, Driver
 
 from app.config import settings
 from app.models import ParsedDocument, ParameterRow, ExtractedTable
+from app.utils.normalization import normalize_lookup_text
 
 logger = logging.getLogger(__name__)
+
+
+_NORM_REMOVE_CHARS = [
+    "\r",
+    "\n",
+    "\t",
+    " ",
+    "/",
+    "-",
+    "(",
+    ")",
+    "[",
+    "]",
+    "{",
+    "}",
+    ".",
+    ",",
+    ":",
+    ";",
+    "_",
+]
 
 
 class GraphBuilder:
@@ -40,6 +62,7 @@ class GraphBuilder:
                 auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD),
             )
             logger.info("Connected to Neo4j at %s", settings.NEO4J_URI)
+            self._ensure_parameter_norm_names()
 
     def close(self):
         if self._driver:
@@ -203,6 +226,7 @@ class GraphBuilder:
         # Include condition in uid to avoid MERGE collision for multi-row params
         condition_key = param.conditions.replace(" ", "") if param.conditions else "nocond"
         param_uid = f"{table_uid}::{param.parameter}::{condition_key}"
+        norm_name = normalize_lookup_text(param.parameter)
 
         session.run(
             """
@@ -210,6 +234,7 @@ class GraphBuilder:
             MATCH (tbl:Table {uid: $table_uid})
             MERGE (p:Parameter {uid: $param_uid})
             SET p.name = $name,
+                p.norm_name = $norm_name,
                 p.symbol = $symbol,
                 p.condition = $condition
             MERGE (c)-[:HAS_PARAMETER]->(p)
@@ -219,6 +244,7 @@ class GraphBuilder:
             table_uid=table_uid,
             param_uid=param_uid,
             name=param.parameter,
+            norm_name=norm_name,
             symbol=param.symbol,
             condition=param.conditions,
         )
@@ -308,22 +334,22 @@ class GraphBuilder:
 
     def query_parameter(self, param_name: str, component: str = "") -> list[dict]:
         """
-        Query parameters by name using normalized exact match first, then
-        a normalized partial-match fallback.
+        Query parameters by normalized name using exact match first, then
+        a deterministic CONTAINS fallback.
         """
-        normalized_param_name = self._normalize_lookup_text(param_name)
-        normalized_component = self._normalize_lookup_text(component)
-        normalized_name_expr = (
-            "toLower(trim("
-            "replace(replace(replace(replace(replace(replace(p.name, '\\r', ' '), '\\n', ' '), '  ', ' '), '  ', ' '), '  ', ' '), '  ', ' ')"
-            "))"
-        )
-        normalized_component_expr = (
-            "toLower(trim("
-            "replace(replace(replace(replace(replace(replace(c.name, '\\r', ' '), '\\n', ' '), '  ', ' '), '  ', ' '), '  ', ' '), '  ', ' ')"
-            "))"
-        )
+        normalized_param_name = normalize_lookup_text(param_name)
+        normalized_component = component.strip().lower()
+        normalized_name_expr = f"coalesce(p.norm_name, {self._cypher_normalize_expr('p.name')})"
         logger.info("Normalized parameter query: '%s'", normalized_param_name)
+
+        sample_cypher = f"""
+        MATCH (c:Component)-[:HAS_PARAMETER]->(p:Parameter)
+        WHERE $component = '' OR toLower(c.name) CONTAINS $component
+        RETURN p.name AS parameter,
+               {normalized_name_expr} AS norm_name
+        ORDER BY p.name
+        LIMIT 5
+        """
 
         exact_cypher = f"""
         MATCH (c:Component)-[:HAS_PARAMETER]->(p:Parameter)-[:HAS_VALUE]->(v:Value)
@@ -333,7 +359,7 @@ class GraphBuilder:
           AND v.value IS NOT NULL AND v.value <> ''
         """
         if normalized_component:
-            exact_cypher += f" AND {normalized_component_expr} CONTAINS $component"
+            exact_cypher += " AND toLower(c.name) CONTAINS $component"
 
         exact_cypher += """
         RETURN c.name          AS component,
@@ -355,7 +381,7 @@ class GraphBuilder:
           AND v.value IS NOT NULL AND v.value <> ''
         """
         if normalized_component:
-            fallback_cypher += f" AND {normalized_component_expr} CONTAINS $component"
+            fallback_cypher += " AND toLower(c.name) CONTAINS $component"
 
         fallback_cypher += """
         RETURN c.name          AS component,
@@ -370,6 +396,12 @@ class GraphBuilder:
         """
 
         with self.driver.session() as session:
+            sample_rows = session.run(
+                sample_cypher,
+                component=normalized_component,
+            ).data()
+            logger.info("Sample normalized DB values: %s", sample_rows)
+
             exact_rows = [
                 dict(r)
                 for r in session.run(
@@ -397,9 +429,30 @@ class GraphBuilder:
             return fallback_rows
 
     @staticmethod
-    def _normalize_lookup_text(value: str) -> str:
-        """Normalize lookup text for deterministic string matching."""
-        return " ".join((value or "").split()).strip().lower()
+    def _cypher_normalize_expr(field_name: str) -> str:
+        """Build a Cypher normalization expression for legacy rows."""
+        expr = f"toLower(trim(coalesce({field_name}, '')))"
+        for char in _NORM_REMOVE_CHARS:
+            escaped = char.replace("\\", "\\\\").replace("'", "\\'")
+            expr = f"replace({expr}, '{escaped}', '')"
+        return expr
+
+    def _ensure_parameter_norm_names(self):
+        """Backfill normalized names for existing Parameter nodes."""
+        cypher_norm_name = self._cypher_normalize_expr("p.name")
+        with self.driver.session() as session:
+            updated = session.run(
+                f"""
+                MATCH (p:Parameter)
+                WHERE p.norm_name IS NULL OR p.norm_name = ''
+                SET p.norm_name = {cypher_norm_name}
+                RETURN count(p) AS updated
+                """
+            ).single()
+        logger.info(
+            "Parameter norm_name backfill updated %d nodes",
+            updated["updated"] if updated else 0,
+        )
 
     def query_text(self, search_term: str, component: str = "") -> list[dict]:
         """

@@ -14,8 +14,12 @@ class Settings(BaseSettings):
     # Qwen Colab endpoint (set after launching Colab notebook)
     QWEN_API_URL: str = ""
 
-    # Flag to enable loading Qwen 3.5 4B directly in the backend process
+    # Flag to enable loading Qwen locally in the backend process
     ENABLE_LOCAL_QWEN: bool = True
+
+    # Qwen model to load — Qwen2.5 real sizes: 0.5B, 1.5B, 3B, 7B, 32B (no 4B exists)
+    # Use 7B for best quality on Colab T4 GPU, switch to 3B if you hit out-of-memory
+    QWEN_MODEL_NAME: str = "Qwen/Qwen2.5-7B-Instruct"
 
     # Upload directory
     UPLOAD_DIR: str = os.path.join(os.path.dirname(os.path.dirname(__file__)), "uploads")

@@ -33,7 +33,9 @@ def init_qwen_local():
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        model_name = "Qwen/Qwen2.5-4B-Instruct"
+        # Qwen2.5-4B does NOT exist — real sizes: 0.5B, 1.5B, 3B, 7B, 32B
+        # Use 7B for best quality on Colab T4, or 3B if you hit OOM
+        model_name = getattr(settings, "QWEN_MODEL_NAME", "Qwen/Qwen2.5-7B-Instruct")
         _tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
         
         # Load efficiently on Colab GPU if available

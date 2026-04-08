@@ -17,12 +17,27 @@ if _BACKEND_DIR not in sys.path:
     sys.path.insert(0, _BACKEND_DIR)
 # ──────────────────────────────────────────────────────────────
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from pdf_parser import extract_all_pages, generate_chat_response, extract_specs
-from rag_engine import store_document, retrieve_context, clear_collection
+from rag_engine import store_document, retrieve_context, clear_collection, _get_embedder
+from model_loader import load_model
+
+# ── Lifespan: pre-load models at startup ──────────────────────
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Runs on server startup — loads all heavy models before serving requests."""
+    print("[startup] Pre-loading Qwen2.5-VL-7B into GPU...")
+    load_model()                  # loads vision LLM + processor
+    print("[startup] Pre-loading BGE-M3 embedding model...")
+    _get_embedder()               # loads sentence-transformers model
+    print("[startup] ✅ All models ready. Server is now accepting requests.")
+    yield                         # server runs here
+    print("[shutdown] Server shutting down.")
 
 # ── App Setup ─────────────────────────────────────────────────
 
@@ -30,6 +45,7 @@ app = FastAPI(
     title="CircuitAI Backend",
     description="Vision-RAG API for semiconductor datasheet analysis",
     version="1.0.0",
+    lifespan=lifespan,            # ← attach the startup/shutdown hook
 )
 
 app.add_middleware(

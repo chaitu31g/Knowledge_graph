@@ -19,8 +19,8 @@ accelerate>=0.30.0
 bitsandbytes>=0.43.0
 qwen-vl-utils>=0.0.8
 
-# --- PDF → Image Pipeline ---
-pdf2image>=1.16.0
+# --- PDF → Image Pipeline (pure Python, no poppler needed) ---
+pypdfium2>=4.20.0
 Pillow>=10.0.0
 
 # --- RAG Stack ---

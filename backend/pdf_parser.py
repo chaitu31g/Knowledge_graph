@@ -6,10 +6,10 @@ except NameError:
 if _BACKEND_DIR not in sys.path:
     sys.path.insert(0, _BACKEND_DIR)
 
-from pdf2image import convert_from_bytes
-from model_loader import run_inference
-from PIL import Image
 import io
+import pypdfium2 as pdfium       # pure Python, no poppler system dep
+from PIL import Image
+from model_loader import run_inference
 
 # Prompt engineering for datasheet parsing
 TABLE_PROMPT = (
@@ -43,9 +43,24 @@ SPEC_EXTRACTION_PROMPT = (
 )
 
 
-def pdf_to_images(pdf_bytes: bytes, max_pages: int = 6) -> list[Image.Image]:
-    """Convert PDF bytes to a list of PIL images (capped at max_pages)."""
-    return convert_from_bytes(pdf_bytes, first_page=1, last_page=max_pages, dpi=150)
+def pdf_to_images(pdf_bytes: bytes, max_pages: int = 6, dpi: int = 150) -> list:
+    """
+    Convert PDF bytes to a list of PIL Images using pypdfium2.
+    No poppler / system dependency required.
+    """
+    doc = pdfium.PdfDocument(pdf_bytes)
+    images = []
+    n_pages = min(len(doc), max_pages)
+    scale = dpi / 72  # pypdfium2 renders at 72 DPI base; scale up to target DPI
+
+    for i in range(n_pages):
+        page = doc[i]
+        bitmap = page.render(scale=scale, rotation=0)
+        pil_image = bitmap.to_pil()
+        images.append(pil_image)
+
+    doc.close()
+    return images
 
 
 def extract_text_from_page(image: Image.Image) -> str:

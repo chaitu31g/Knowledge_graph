@@ -1,0 +1,29 @@
+# ============================================================
+# CircuitAI Backend — Google Colab Requirements
+# ============================================================
+# Install all dependencies in a single Colab cell with:
+#   !pip install -r requirements.txt
+
+# --- Core API ---
+fastapi==0.115.12
+uvicorn[standard]==0.34.2
+python-multipart==0.0.20
+pydantic==2.11.3
+
+# --- Vision Model (Qwen2.5-VL) ---
+transformers==4.51.3
+accelerate==1.6.0
+bitsandbytes==0.45.5
+qwen-vl-utils==0.0.10
+
+# --- PDF → Image Pipeline ---
+pdf2image==1.17.0
+Pillow==11.2.1
+
+# --- RAG Stack ---
+chromadb==1.0.4
+FlagEmbedding==1.3.4
+flashrank==0.2.10
+
+# --- Utilities ---
+numpy==2.2.4

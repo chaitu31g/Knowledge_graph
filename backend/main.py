@@ -31,7 +31,7 @@ from model_loader import load_model
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Runs on server startup — loads all heavy models before serving requests."""
-    print("[startup] Pre-loading Qwen2.5-VL-7B into GPU...")
+    print("[startup] Pre-loading Qwen2.5-VL-3B into GPU...")
     load_model()                  # loads vision LLM + processor
     print("[startup] Pre-loading BGE-M3 embedding model...")
     _get_embedder()               # loads sentence-transformers model
@@ -83,7 +83,7 @@ class ProcessResponse(BaseModel):
 @app.get("/health")
 async def health():
     """Health check — the frontend pings this to verify connectivity."""
-    return {"status": "ok", "model": "Qwen2.5-VL-7B-Instruct (4-bit)"}
+    return {"status": "ok", "model": "Qwen2.5-VL-3B-Instruct (4-bit)"}
 
 
 @app.post("/process", response_model=ProcessResponse)

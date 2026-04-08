@@ -9,7 +9,9 @@ os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
 _model = None
 _processor = None
 
-MODEL_ID = "Qwen/Qwen2.5-VL-7B-Instruct"
+MODEL_ID = "Qwen/Qwen2.5-VL-3B-Instruct"
+# ↑ 3B fits on T4 (16 GB) with 4-bit quant (~2 GB weights).
+# For L4/A100 (24 GB+) you can use "Qwen/Qwen2.5-VL-7B-Instruct".
 
 # Pixel caps for the vision encoder.
 # 512 * 28 * 28 = ~401k px — safe upper bound for T4 16 GB with 4-bit model

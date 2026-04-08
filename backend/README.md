@@ -9,7 +9,7 @@ This folder contains the Google Colab backend for CircuitAI.
 | `circuit_ai_colab.ipynb` | **Start here** — Upload to Colab and run cells in order |
 | `requirements.txt` | All Python dependencies (installed in Cell 2) |
 | `main.py` | FastAPI server with `/health`, `/process`, `/chat` endpoints |
-| `model_loader.py` | Singleton loader for Qwen2.5-VL-7B-Instruct (4-bit) |
+| `model_loader.py` | Singleton loader for Qwen2.5-VL-3B-Instruct (4-bit) |
 | `pdf_parser.py` | PDF → image → vision LLM → Markdown pipeline |
 | `rag_engine.py` | ChromaDB storage + BGE-M3 embeddings + FlashRank reranking |
 

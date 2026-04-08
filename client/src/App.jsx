@@ -345,7 +345,7 @@ const App = () => {
               </div>
               <div className="flex items-center space-x-1.5 text-[10px] text-slate-600 font-mono">
                 <Cpu size={10} />
-                <span>QWEN2.5-VL 4-BIT</span>
+                <span>QWEN2.5-VL 3B-INT4</span>
               </div>
             </div>
             <p className="text-[10px] text-slate-700 uppercase tracking-widest font-semibold">T4/L4 GPU</p>

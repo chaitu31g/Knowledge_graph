@@ -117,11 +117,10 @@ async def chat(req: ChatRequest):
     return ChatResponse(response=response_text, specs=state.latest_specs)
 
 
-# ── Server Entry ───────────────────────────────────────────────
-
-def start_server():
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+# ── Server Entry (direct run only) ────────────────────────────
+# When running on Colab, the notebook starts uvicorn directly.
+# This block is only used for local testing outside Colab.
 
 if __name__ == "__main__":
-    # Direct run (for local testing outside Colab)
-    start_server()
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")

@@ -121,7 +121,17 @@ async def process_pdf(file: UploadFile = File(...)):
                 yield _sse({"type": "progress", "step": "extract",
                             "message": f"Extracting data from page {i+1} of {len(images)}...",
                             "page": i + 1, "total": len(images)})
-                text = await loop.run_in_executor(None, extract_text_from_page, img)
+                
+                # Run inference in executor but yield a heartbeat every 15s
+                # to prevent Cloudflare's 100-second idle timeout on slow pages.
+                future = loop.run_in_executor(None, extract_text_from_page, img)
+                while not future.done():
+                    try:
+                        await asyncio.wait_for(asyncio.shield(future), timeout=15.0)
+                    except asyncio.TimeoutError:
+                        yield ": heartbeat\n\n"
+                
+                text = await future
                 if text:
                     pages_text.append(f"### Page {i + 1}\n\n{text}")
                 await loop.run_in_executor(None, torch.cuda.empty_cache)

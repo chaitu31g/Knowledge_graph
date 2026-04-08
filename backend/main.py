@@ -22,15 +22,14 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from server_utils import ensure_models_loaded, release_lock, register_shutdown_handlers
+from server_utils import ensure_models_loaded, release_lock
 from pdf_parser import generate_chat_response, extract_specs
 from rag_engine import store_document, retrieve_context, clear_collection
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Pre-load models at startup and clean up on shutdown."""
-    ensure_models_loaded()           # thread-safe singleton — safe to call multiple times
-    register_shutdown_handlers(extra_cleanup=release_lock)
+    """Pre-load models at startup and release lock on shutdown."""
+    ensure_models_loaded()    # thread-safe singleton — safe to call multiple times
     yield
     release_lock()
     print("[shutdown] Server stopped cleanly ✓")

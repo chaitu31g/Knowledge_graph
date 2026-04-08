@@ -63,8 +63,7 @@ def _get_pids_on_port(port: int) -> list:
 def kill_port(port: int) -> bool:
     """
     Kill processes on *port* only if AUTO_KILL_PORT is enabled.
-    Never kills unrelated system processes — only SIGTERM first,
-    then SIGKILL after 2s if still alive.
+    Polls until the port is confirmed free (up to 10s) before returning.
     """
     if not AUTO_KILL_PORT:
         return False
@@ -80,20 +79,32 @@ def kill_port(port: int) -> bool:
         except ProcessLookupError:
             pass
 
-    time.sleep(2)
+    # Poll up to 10s for SIGTERM to take effect before falling back to SIGKILL
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        time.sleep(0.5)
+        if not is_port_in_use(port):
+            print(f"[startup] Port {port} freed cleanly ✓")
+            return True
 
-    # Force kill if still alive
+    # SIGTERM wasn't enough — force kill
+    print(f"[startup] Port {port} still in use after SIGTERM — sending SIGKILL...")
     for pid in _get_pids_on_port(port):
         try:
             os.kill(pid, signal.SIGKILL)
-            print(f"[startup] SIGKILL sent to PID {pid}")
         except ProcessLookupError:
             pass
 
-    time.sleep(0.5)
-    freed = not is_port_in_use(port)
-    print(f"[startup] Port {port} {'freed ✓' if freed else 'still in use ✗'}")
-    return freed
+    # Final poll
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        time.sleep(0.5)
+        if not is_port_in_use(port):
+            print(f"[startup] Port {port} freed (SIGKILL) ✓")
+            return True
+
+    print(f"[startup] ✗ Could not free port {port}")
+    return False
 
 
 # ── 3. PORT RESOLUTION ─────────────────────────────────────────
